@@ -445,52 +445,88 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
             ordered.append(nxt)
             current = nxt
 
-    # Assign consecutive dates
-    start = datetime.fromisoformat(payload.start_from).date() if payload.start_from else today + timedelta(days=1)
-    cur = start
+    # Assign dates - each contract has its own cursor bounded by [start_date, deadline]
+    global_start = datetime.fromisoformat(payload.start_from).date() if payload.start_from else today + timedelta(days=1)
     new_interventions = []
+    skipped = []  # {contract_id, reason, remaining}
     max_block = max(1, payload.max_days_per_client_block)
     # Count interventions per (contract_id, YYYY-MM) to enforce max_per_month
     per_month_count = {}
     for iv in existing:
         month_key = iv["date"][:7]
         per_month_count[(iv["contract_id"], month_key)] = per_month_count.get((iv["contract_id"], month_key), 0) + 1
+
+    def _parse_date(s):
+        if not s:
+            return None
+        try:
+            return datetime.fromisoformat(s).date()
+        except Exception:
+            return None
+
     for item in ordered:
         c = item["contract"]
         rem = item["remaining"]
-        slot = c.get("intervention_slot", "full") or "full"
         max_pm = c.get("max_per_month")
+        c_start = _parse_date(c.get("start_date"))
+        c_deadline = _parse_date(c.get("deadline"))
+        # Contract-specific cursor: start not before global_start AND not before contract.start_date
+        cur = max(global_start, c_start) if c_start else global_start
+        # Skip past-deadline immediately
+        if c_deadline and cur > c_deadline:
+            skipped.append({"contract_id": c["id"], "reason": "deadline_expired", "remaining": rem})
+            continue
         done_for_contract = planned_per_contract.get(c["id"], 0)
-        while rem > 0:
+        contract_full = False
+        while rem > 0 and not contract_full:
             block = min(max_block, rem)
             for _ in range(block):
-                # Skip weekends + booked + max-per-month cap
+                # Skip weekends + booked
                 if payload.workdays_only:
                     while cur.weekday() >= 5 or cur.isoformat() in booked_dates:
                         cur = cur + timedelta(days=1)
+                        if c_deadline and cur > c_deadline:
+                            break
                 else:
                     while cur.isoformat() in booked_dates:
                         cur = cur + timedelta(days=1)
+                        if c_deadline and cur > c_deadline:
+                            break
+                if c_deadline and cur > c_deadline:
+                    skipped.append({"contract_id": c["id"], "reason": "deadline_reached", "remaining": rem})
+                    contract_full = True
+                    break
                 # Enforce max_per_month cap
                 if max_pm:
                     mkey = (c["id"], cur.isoformat()[:7])
                     while per_month_count.get(mkey, 0) >= max_pm:
-                        # move to next month day 1
                         nxt_month = cur.replace(day=1) + timedelta(days=32)
                         cur = nxt_month.replace(day=1)
+                        if c_deadline and cur > c_deadline:
+                            break
                         if payload.workdays_only:
                             while cur.weekday() >= 5 or cur.isoformat() in booked_dates:
                                 cur = cur + timedelta(days=1)
+                                if c_deadline and cur > c_deadline:
+                                    break
                         else:
                             while cur.isoformat() in booked_dates:
                                 cur = cur + timedelta(days=1)
+                                if c_deadline and cur > c_deadline:
+                                    break
+                        if c_deadline and cur > c_deadline:
+                            break
                         mkey = (c["id"], cur.isoformat()[:7])
+                    if c_deadline and cur > c_deadline:
+                        skipped.append({"contract_id": c["id"], "reason": "deadline_reached", "remaining": rem})
+                        contract_full = True
+                        break
                 iv = Intervention(
                     user_id=user["user_id"],
                     contract_id=c["id"],
                     client_id=c["client_id"],
                     date=cur.isoformat(),
-                    slot=slot,
+                    slot="full",
                     day_index=done_for_contract + 1,
                 )
                 new_interventions.append(iv.model_dump())
@@ -510,7 +546,7 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
         contract_ids = list({iv["contract_id"] for iv in new_interventions})
         await db.contracts.update_many({"id": {"$in": contract_ids}}, {"$set": {"status": "planned"}})
 
-    return {"planned": len(response_items), "interventions": response_items}
+    return {"planned": len(response_items), "interventions": response_items, "skipped": skipped}
 
 
 @api_router.get("/interventions")

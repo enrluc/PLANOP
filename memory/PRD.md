@@ -77,3 +77,11 @@ Consulente/freelance italiano che gestisce interventi presso più clienti. Deplo
 - P2: Export Danea Easyfatt-XML / TeamSystem FATSEQ
 - P2: Aruba REST API integration (richiede AuthToken enterprise)
 - P2: Firma digitale integrata su fatture PDF
+
+## Bug Fixes (2026-02)
+- [x] Planning generator ignorava contract.start_date e contract.deadline → risolto:
+  cursor per-contratto bounded da [max(start_from, start_date), deadline].
+  Nuovo campo di risposta `skipped: [{contract_id, reason, remaining}]` per contratti
+  che non entrano nel loro window (reason: deadline_expired | deadline_reached).
+  UI Planning mostra card ambra "Attenzione - giornate non piazzate" con dettagli.
+  Verificato da testing_agent iter2: 8/8 test pass (100%).

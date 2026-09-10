@@ -17,6 +17,7 @@ export default function Planning() {
   const [workdaysOnly, setWorkdaysOnly] = useState(true);
   const [maxBlock, setMaxBlock] = useState(3);
   const [running, setRunning] = useState(false);
+  const [lastSkipped, setLastSkipped] = useState([]);
 
   const load = () => Promise.all([listContracts(), listClients(), listInterventions()])
     .then(([cs, cls, iv]) => { setContracts(cs); setClients(cls); setIvs(iv); }).catch(() => {});
@@ -41,7 +42,13 @@ export default function Planning() {
         workdays_only: workdaysOnly,
         max_days_per_client_block: Number(maxBlock),
       });
-      toast.success(`${res.planned} interventi pianificati`);
+      const skipped = res.skipped || [];
+      setLastSkipped(skipped);
+      if (skipped.length > 0) {
+        toast.warning(`${res.planned} pianificati, ${skipped.length} contratti con giornate NON piazzate (scadenza raggiunta)`);
+      } else {
+        toast.success(`${res.planned} interventi pianificati`);
+      }
       load();
     } catch (_e) { toast.error("Errore generazione piano"); }
     finally { setRunning(false); }
@@ -94,7 +101,12 @@ export default function Planning() {
                     start_from: startFrom || null, workdays_only: workdaysOnly,
                     max_days_per_client_block: Number(maxBlock),
                   });
-                  toast.success(`Riprogrammati ${r.planned} interventi`);
+                  setLastSkipped(r.skipped || []);
+                  if ((r.skipped || []).length > 0) {
+                    toast.warning(`${r.planned} riprogrammati, ${r.skipped.length} contratti con giornate non piazzate`);
+                  } else {
+                    toast.success(`Riprogrammati ${r.planned} interventi`);
+                  }
                   load();
                 } catch (_e) { toast.error("Errore"); }
                 finally { setRunning(false); }
@@ -139,6 +151,38 @@ export default function Planning() {
           )}
         </Card>
       </div>
+
+      {lastSkipped.length > 0 && (
+        <Card className="mt-6 p-5 border-amber-200 bg-amber-50">
+          <div className="flex items-center gap-2 mb-3">
+            <CalendarClock className="w-5 h-5 text-amber-700" />
+            <h2 className="font-bold font-display text-amber-900">Attenzione — giornate non piazzate</h2>
+          </div>
+          <div className="space-y-2">
+            {lastSkipped.map((s, i) => {
+              const c = contracts.find((x) => x.id === s.contract_id);
+              const reasonLabel = s.reason === "deadline_expired"
+                ? "Scadenza già superata"
+                : "Scadenza raggiunta prima di completare le giornate";
+              return (
+                <div key={i} data-testid={`skipped-${s.contract_id}`} className="flex items-center justify-between p-2 bg-white border border-amber-200 rounded">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-900">{c?.title || s.contract_id}</div>
+                    <div className="text-xs text-slate-600">{reasonLabel} · Scadenza: <span className="font-mono">{c?.deadline || "n/d"}</span></div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-sm font-bold text-amber-700">{s.remaining}g</div>
+                    <div className="text-[10px] text-slate-500">non piazzati</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-3 text-xs text-amber-800">
+            Suggerimento: sposta la scadenza in avanti o aumenta il numero di interventi al mese sul contratto.
+          </div>
+        </Card>
+      )}
 
       {ivs.length > 0 && (
         <Card className="mt-6 p-6 border-slate-200 bg-white">
