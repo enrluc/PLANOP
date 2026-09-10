@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { listClients, createClient, updateClient, deleteClient } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import { listClients, createClient, updateClient, deleteClient, aiAnalyzeContractPdf } from "../lib/api";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -8,7 +8,7 @@ import { Textarea } from "../components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from "../components/ui/dialog";
-import { Plus, MapPin, Phone, Mail, Trash2, Edit3 } from "lucide-react";
+import { Plus, MapPin, Phone, Mail, Trash2, Edit3, Upload, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 const empty = { name: "", address: "", city: "", contact_name: "", phone: "", email: "", notes: "" };
@@ -18,9 +18,38 @@ export default function Clients() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(empty);
   const [editId, setEditId] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const fileRef = useRef(null);
 
   const load = () => listClients().then(setItems).catch(() => {});
   useEffect(() => { load(); }, []);
+
+  const handleImportPdf = async (file) => {
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) { toast.error("PDF troppo grande (max 15MB)"); return; }
+    setImporting(true);
+    try {
+      const r = await aiAnalyzeContractPdf(file);
+      const d = r.extracted || {};
+      setEditId(null);
+      setForm({
+        name: d.client_name || "",
+        address: d.address || "",
+        city: d.city || "",
+        contact_name: d.contact_name || "",
+        phone: d.phone || "",
+        email: d.email || "",
+        notes: d.notes || "",
+      });
+      setOpen(true);
+      toast.success(`PDF letto (${r.pages || "?"} pagine) - controlla i dati e salva`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Estrazione PDF fallita");
+    } finally {
+      setImporting(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
 
   const submit = async () => {
     if (!form.name || !form.address) { toast.error("Nome e indirizzo obbligatori"); return; }
@@ -58,6 +87,24 @@ export default function Clients() {
           <div className="text-xs font-medium tracking-wider uppercase text-slate-500">Anagrafica</div>
           <h1 className="mt-1 text-3xl sm:text-4xl font-extrabold font-display text-slate-900">Clienti</h1>
         </div>
+        <div className="flex gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/pdf,.pdf"
+            className="hidden"
+            data-testid="client-pdf-input"
+            onChange={(e) => handleImportPdf(e.target.files?.[0])}
+          />
+          <Button
+            data-testid="import-client-pdf-button"
+            variant="outline"
+            onClick={() => fileRef.current?.click()}
+            disabled={importing}
+          >
+            {importing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            Importa da PDF
+          </Button>
         <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setEditId(null); setForm(empty); } }}>
           <DialogTrigger asChild>
             <Button data-testid="add-client-button" className="bg-slate-900 hover:bg-slate-800 text-white">
@@ -109,6 +156,7 @@ export default function Clients() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
