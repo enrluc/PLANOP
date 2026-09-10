@@ -19,6 +19,14 @@ Consulente/freelance italiano che gestisce interventi presso più clienti, con c
 - Sincronizzazione Google Calendar via URL .ics (subscribe)
 - Fattura PDF finale (regime forfettario, IVA, ritenuta d'acconto, marca da bollo)
 
+## AI Integration (2026-02, added later)
+- Emergent LLM Key + Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) via emergentintegrations
+- /api/ai/analyze-contract: estrae JSON strutturato da testo contratto
+- /api/ai/planning-chat: chat assistente con contesto reale (contratti/clienti/interventi)
+- /api/ai/chat-history: persistenza messaggi in Mongo (collection ai_messages)
+- /api/ai/draft: bozza email/note contestuale
+- Frontend: nuova pagina /ai (tab Chat + tab Analizza) collegata dalla sidebar
+
 ## Implementation Status (2026-02)
 - [x] Emergent Google Auth (session cookie + Bearer)
 - [x] Clients CRUD + geocoding OSM

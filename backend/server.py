@@ -17,6 +17,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdfcanvas
+from emergentintegrations.llm.chat import LlmChat, UserMessage
+import json as _json
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -748,6 +750,159 @@ async def stats(user=Depends(get_current_user)):
 @api_router.get("/")
 async def root():
     return {"app": "PlanOp", "status": "ok"}
+
+
+# =============== CLAUDE AI (Haiku 4.5) ===============
+
+EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _make_chat(session_id: str, system: str) -> LlmChat:
+    return LlmChat(
+        api_key=EMERGENT_LLM_KEY,
+        session_id=session_id,
+        system_message=system,
+    ).with_model("anthropic", CLAUDE_MODEL)
+
+
+class AnalyzeContractIn(BaseModel):
+    text: str
+
+
+@api_router.post("/ai/analyze-contract")
+async def analyze_contract(payload: AnalyzeContractIn, user=Depends(get_current_user)):
+    """Extract structured contract fields from raw contract text using Claude Haiku 4.5."""
+    sys_msg = (
+        "Sei un assistente italiano che estrae dati strutturati da contratti di consulenza. "
+        "Restituisci SOLO un oggetto JSON valido con questi campi: "
+        "{\"client_name\": string, \"city\": string, \"address\": string, "
+        "\"contact_name\": string, \"phone\": string, \"email\": string, "
+        "\"title\": string (titolo/oggetto attività), "
+        "\"total_days\": integer (numero giornate previste), "
+        "\"daily_rate\": number (tariffa giornaliera EUR, 0 se non specificata), "
+        "\"intervention_type\": string (es. consulenza/formazione/audit), "
+        "\"priority\": string (\"high\"|\"medium\"|\"low\", default medium), "
+        "\"start_date\": string (YYYY-MM-DD o \"\"), "
+        "\"deadline\": string (YYYY-MM-DD o \"\"), "
+        "\"signed_date\": string (YYYY-MM-DD o \"\"), "
+        "\"notes\": string (riassunto breve)}. "
+        "Se un campo non è presente nel testo, usa stringa vuota o 0. NON aggiungere testo fuori dal JSON."
+    )
+    chat = _make_chat(f"analyze-{user['user_id']}-{uuid.uuid4().hex[:6]}", sys_msg)
+    resp = await chat.send_message(UserMessage(text=f"Analizza il seguente contratto ed estrai i dati:\n\n{payload.text}"))
+    raw = resp if isinstance(resp, str) else str(resp)
+    # Strip code fences if present
+    txt = raw.strip()
+    if txt.startswith("```"):
+        txt = txt.strip("`")
+        if txt.lower().startswith("json"):
+            txt = txt[4:]
+        txt = txt.strip()
+    # Find outermost JSON braces
+    start = txt.find("{")
+    end = txt.rfind("}")
+    if start >= 0 and end > start:
+        txt = txt[start:end+1]
+    try:
+        data = _json.loads(txt)
+    except Exception:
+        raise HTTPException(422, f"AI response was not valid JSON: {raw[:200]}")
+    return {"extracted": data, "model": CLAUDE_MODEL}
+
+
+class ChatIn(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+
+
+@api_router.post("/ai/planning-chat")
+async def planning_chat(payload: ChatIn, user=Depends(get_current_user)):
+    """Conversational planning assistant. Loads current contracts/clients/interventions
+    as context so suggestions are grounded in real data."""
+    session_id = payload.session_id or f"plan-{user['user_id']}"
+    # Load context
+    contracts = await db.contracts.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(200)
+    clients = await db.clients.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(200)
+    ivs = await db.interventions.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(1000)
+    manual = await db.manual_events.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(500)
+
+    context = {
+        "today": date.today().isoformat(),
+        "clients": [{"id": c["id"], "name": c["name"], "city": c.get("city", "")} for c in clients],
+        "contracts": [{"id": c["id"], "title": c["title"], "client_id": c["client_id"],
+                       "total_days": c["total_days"], "priority": c["priority"],
+                       "deadline": c.get("deadline"), "status": c["status"]} for c in contracts],
+        "interventions": [{"contract_id": iv["contract_id"], "date": iv["date"]} for iv in ivs],
+        "manual_events": [{"date": e["date"], "title": e["title"]} for e in manual],
+    }
+    sys_msg = (
+        "Sei l'assistente italiano di pianificazione di PlanOp. "
+        "Aiuti un consulente a organizzare gli interventi presso i clienti. "
+        "Rispondi in italiano, in modo conciso, con eventuali suggerimenti di date/priorità. "
+        "Usa il seguente contesto reale dell'utente in JSON per rispondere:\n\n"
+        f"{_json.dumps(context, ensure_ascii=False)}"
+    )
+    # Persist history
+    history_key = f"{user['user_id']}:{session_id}"
+    await db.ai_messages.insert_one({
+        "user_id": user["user_id"], "session_id": session_id,
+        "role": "user", "content": payload.message,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    chat = _make_chat(history_key, sys_msg)
+    resp = await chat.send_message(UserMessage(text=payload.message))
+    reply = resp if isinstance(resp, str) else str(resp)
+    await db.ai_messages.insert_one({
+        "user_id": user["user_id"], "session_id": session_id,
+        "role": "assistant", "content": reply,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"reply": reply, "session_id": session_id}
+
+
+@api_router.get("/ai/chat-history")
+async def chat_history(session_id: str, user=Depends(get_current_user)):
+    docs = await db.ai_messages.find(
+        {"user_id": user["user_id"], "session_id": session_id}, {"_id": 0}
+    ).sort("created_at", 1).to_list(200)
+    return docs
+
+
+class DraftIn(BaseModel):
+    kind: str = "email"  # "email" or "note"
+    contract_id: Optional[str] = None
+    client_id: Optional[str] = None
+    intervention_date: Optional[str] = None
+    extra_prompt: Optional[str] = ""
+
+
+@api_router.post("/ai/draft")
+async def ai_draft(payload: DraftIn, user=Depends(get_current_user)):
+    """Generate draft email/note for a client or intervention."""
+    ctx = {}
+    if payload.contract_id:
+        c = await db.contracts.find_one({"id": payload.contract_id, "user_id": user["user_id"]}, {"_id": 0})
+        if c: ctx["contract"] = c
+    if payload.client_id:
+        cli = await db.clients.find_one({"id": payload.client_id, "user_id": user["user_id"]}, {"_id": 0})
+        if cli: ctx["client"] = cli
+    if payload.intervention_date:
+        ctx["intervention_date"] = payload.intervention_date
+
+    if payload.kind == "email":
+        sys_msg = (
+            "Sei un assistente italiano che scrive email professionali brevi e cordiali "
+            "da consulenti freelance ai loro clienti. Includi oggetto (prima riga: 'Oggetto: ...'), "
+            "corpo con saluto, informazioni chiave, chiusura formale. Firma con [Il tuo nome]."
+        )
+    else:
+        sys_msg = "Sei un assistente italiano che scrive brevi note operative interne di 3-6 righe."
+
+    prompt = f"Contesto: {_json.dumps(ctx, ensure_ascii=False)}\n\nIstruzioni aggiuntive: {payload.extra_prompt or 'nessuna'}"
+    chat = _make_chat(f"draft-{user['user_id']}-{uuid.uuid4().hex[:6]}", sys_msg)
+    resp = await chat.send_message(UserMessage(text=prompt))
+    return {"draft": resp if isinstance(resp, str) else str(resp), "model": CLAUDE_MODEL}
 
 
 app.include_router(api_router)

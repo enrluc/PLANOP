@@ -10,6 +10,7 @@ import Clients from "@/pages/Clients";
 import Planning from "@/pages/Planning";
 import CalendarPage from "@/pages/CalendarPage";
 import Invoices from "@/pages/Invoices";
+import AIAssistant from "@/pages/AIAssistant";
 import { Toaster } from "@/components/ui/sonner";
 
 function Protected({ children }) {
@@ -34,6 +35,7 @@ function AppRouter() {
         <Route path="clients" element={<Clients />} />
         <Route path="planning" element={<Planning />} />
         <Route path="calendar" element={<CalendarPage />} />
+        <Route path="ai" element={<AIAssistant />} />
         <Route path="invoices" element={<Invoices />} />
       </Route>
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

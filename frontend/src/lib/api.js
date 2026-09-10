@@ -42,3 +42,10 @@ export const generateInvoice = async (data) => {
   const resp = await api.post("/invoices/generate", data, { responseType: "blob" });
   return resp.data;
 };
+
+export const aiAnalyzeContract = (text) => api.post("/ai/analyze-contract", { text }).then(r => r.data);
+export const aiPlanningChat = (message, session_id) =>
+  api.post("/ai/planning-chat", { message, session_id }).then(r => r.data);
+export const aiChatHistory = (session_id) =>
+  api.get("/ai/chat-history", { params: { session_id } }).then(r => r.data);
+export const aiDraft = (data) => api.post("/ai/draft", data).then(r => r.data);
