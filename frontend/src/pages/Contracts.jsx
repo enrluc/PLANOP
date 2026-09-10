@@ -20,7 +20,7 @@ import { exportFatturaPaUrl, contractsTemplateCsvUrl, importContractsCsv } from 
 
 const empty = {
   numero_preventivo: "", client_id: "", title: "", total_days: 1, daily_rate: 0, intervention_type: "consulenza",
-  intervention_slot: "full", max_per_month: null,
+  max_per_month: null,
   priority: "medium", start_date: "", deadline: "", signed_date: "", notes: "",
 };
 
@@ -103,6 +103,7 @@ export default function Contracts() {
         daily_rate: Number(d.daily_rate) || 0,
         intervention_type: d.intervention_type || "consulenza",
         priority: ["high", "medium", "low"].includes(d.priority) ? d.priority : "medium",
+        max_per_month: null,
         start_date: d.start_date || "",
         deadline: d.deadline || "",
         signed_date: d.signed_date || "",
@@ -144,7 +145,6 @@ export default function Contracts() {
       numero_preventivo: c.numero_preventivo || "",
       client_id: c.client_id, title: c.title, total_days: c.total_days, daily_rate: c.daily_rate,
       intervention_type: c.intervention_type, priority: c.priority,
-      intervention_slot: c.intervention_slot || "full",
       max_per_month: c.max_per_month || null,
       start_date: c.start_date || "", deadline: c.deadline || "", signed_date: c.signed_date || "",
       notes: c.notes || "",
@@ -272,22 +272,10 @@ export default function Contracts() {
                 <Label>Tipologia intervento</Label>
                 <Input data-testid="contract-type-input" value={form.intervention_type} onChange={(e) => setForm({ ...form, intervention_type: e.target.value })} placeholder="es. Consulenza, Formazione, Audit…" />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <Label>Fascia oraria intervento</Label>
-                  <Select value={form.intervention_slot || "full"} onValueChange={(v) => setForm({ ...form, intervention_slot: v })}>
-                    <SelectTrigger data-testid="contract-slot-select" className="bg-white"><SelectValue /></SelectTrigger>
-                    <SelectContent className="bg-white">
-                      <SelectItem value="full">Giornata intera (09:00 - 18:00)</SelectItem>
-                      <SelectItem value="morning">Mattina (09:00 - 13:30)</SelectItem>
-                      <SelectItem value="afternoon">Pomeriggio (14:30 - 18:00)</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label>Max interventi / mese</Label>
-                  <Input data-testid="contract-maxpm-input" type="number" min="0" value={form.max_per_month || ""} onChange={(e) => setForm({ ...form, max_per_month: e.target.value ? Number(e.target.value) : null })} placeholder="Nessun limite" />
-                </div>
+              <div>
+                <Label>Max interventi / mese</Label>
+                <Input data-testid="contract-maxpm-input" type="number" min="0" value={form.max_per_month || ""} onChange={(e) => setForm({ ...form, max_per_month: e.target.value ? Number(e.target.value) : null })} placeholder="Nessun limite" />
+                <div className="text-xs text-slate-500 mt-1">La fascia oraria (mattina/pomeriggio/intera) si sceglie in Planning al momento della programmazione</div>
               </div>
               <div className="grid grid-cols-3 gap-3">
                 <div>

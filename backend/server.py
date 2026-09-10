@@ -554,6 +554,29 @@ def _confirmation_html(client_name: str, intervention_date: str, slot: str,
     )
 
 
+class InterventionUpdate(BaseModel):
+    slot: Optional[str] = None  # full | morning | afternoon
+    notes: Optional[str] = None
+
+
+@api_router.put("/interventions/{intervention_id}")
+async def update_intervention(intervention_id: str, payload: InterventionUpdate, user=Depends(get_current_user)):
+    doc = await db.interventions.find_one({"id": intervention_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Intervento non trovato")
+    updates = {}
+    if payload.slot is not None:
+        if payload.slot not in ("full", "morning", "afternoon"):
+            raise HTTPException(400, "Slot non valido")
+        updates["slot"] = payload.slot
+    if payload.notes is not None:
+        updates["notes"] = payload.notes
+    if updates:
+        await db.interventions.update_one({"id": intervention_id}, {"$set": updates})
+    fresh = await db.interventions.find_one({"id": intervention_id}, {"_id": 0})
+    return fresh
+
+
 @api_router.post("/interventions/{intervention_id}/confirm")
 async def confirm_intervention(intervention_id: str, user=Depends(get_current_user)):
     """Mark an intervention as confirmed and send confirmation email to the client."""

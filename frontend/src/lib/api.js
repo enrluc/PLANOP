@@ -28,6 +28,7 @@ export const generatePlan = (data) => api.post("/planning/generate", data).then(
 export const listInterventions = () => api.get("/interventions").then((r) => r.data);
 export const confirmIntervention = (id) => api.post(`/interventions/${id}/confirm`).then(r => r.data);
 export const unconfirmIntervention = (id) => api.post(`/interventions/${id}/unconfirm`).then(r => r.data);
+export const updateIntervention = (id, data) => api.put(`/interventions/${id}`, data).then(r => r.data);
 export const clearContractPlan = (contract_id) =>
   api.delete(`/interventions/contract/${contract_id}`).then((r) => r.data);
 export const reschedulePlan = (data) => api.post("/planning/reschedule", data).then((r) => r.data);

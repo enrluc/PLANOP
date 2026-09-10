@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
-import { generatePlan, reschedulePlan, listInterventions, listContracts, listClients, confirmIntervention, unconfirmIntervention } from "../lib/api";
+import { generatePlan, reschedulePlan, listInterventions, listContracts, listClients, confirmIntervention, unconfirmIntervention, updateIntervention } from "../lib/api";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../components/ui/select";
 import { Route, Play, MapPin, CalendarClock, RefreshCw, CheckCircle2, Mail } from "lucide-react";
 import { toast } from "sonner";
 
@@ -147,7 +148,7 @@ export default function Planning() {
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wider text-slate-500">
                   <th className="py-2 pr-4">Data</th>
-                  <th className="py-2 pr-4">Orario</th>
+                  <th className="py-2 pr-4">Fascia oraria</th>
                   <th className="py-2 pr-4">Cliente</th>
                   <th className="py-2 pr-4">Contratto</th>
                   <th className="py-2 pr-4">Stato</th>
@@ -159,7 +160,6 @@ export default function Planning() {
                   const c = contractFor(iv.contract_id);
                   const cli = clientFor(iv.client_id);
                   const slot = iv.slot || "full";
-                  const slotLabel = slot === "morning" ? "09:00-13:30" : slot === "afternoon" ? "14:30-18:00" : "09:00-18:00";
                   const confirmed = iv.status === "confirmed";
                   const doConfirm = async () => {
                     try {
@@ -173,10 +173,28 @@ export default function Planning() {
                     try { await unconfirmIntervention(iv.id); toast.success("Riportato a pianificato"); load(); }
                     catch (_e) { toast.error("Errore"); }
                   };
+                  const doSlot = async (newSlot) => {
+                    try {
+                      await updateIntervention(iv.id, { slot: newSlot });
+                      toast.success("Fascia oraria aggiornata");
+                      load();
+                    } catch (_e) { toast.error("Errore aggiornamento"); }
+                  };
                   return (
                     <tr key={iv.id} data-testid={`plan-intervention-${iv.id}`} className="border-b border-slate-100">
                       <td className="py-2 pr-4 font-mono text-xs">{iv.date}</td>
-                      <td className="py-2 pr-4 text-xs text-slate-600 font-mono">{slotLabel}</td>
+                      <td className="py-2 pr-4">
+                        <Select value={slot} onValueChange={doSlot} disabled={confirmed}>
+                          <SelectTrigger data-testid={`slot-select-${iv.id}`} className="h-8 text-xs bg-white w-[180px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent className="bg-white">
+                            <SelectItem value="full">Intera (09:00-18:00)</SelectItem>
+                            <SelectItem value="morning">Mattina (09:00-13:30)</SelectItem>
+                            <SelectItem value="afternoon">Pomeriggio (14:30-18:00)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </td>
                       <td className="py-2 pr-4">{cli?.name || "—"}</td>
                       <td className="py-2 pr-4 text-slate-600 truncate max-w-xs">{c?.title || "—"}</td>
                       <td className="py-2 pr-4">
