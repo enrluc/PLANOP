@@ -15,7 +15,7 @@ export default function Planning() {
   const [ivs, setIvs] = useState([]);
   const [startFrom, setStartFrom] = useState("");
   const [workdaysOnly, setWorkdaysOnly] = useState(true);
-  const [maxBlock, setMaxBlock] = useState(3);
+  const [maxBlock, setMaxBlock] = useState(1);
   const [running, setRunning] = useState(false);
   const [lastSkipped, setLastSkipped] = useState([]);
 

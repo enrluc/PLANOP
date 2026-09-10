@@ -342,7 +342,7 @@ async def complete_contract(contract_id: str, user=Depends(get_current_user)):
 class PlanRequest(BaseModel):
     start_from: Optional[str] = None  # YYYY-MM-DD, default = tomorrow
     workdays_only: bool = True  # skip weekends
-    max_days_per_client_block: int = 3
+    max_days_per_client_block: int = 1
 
 
 @api_router.post("/planning/generate")

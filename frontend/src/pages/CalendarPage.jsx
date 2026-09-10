@@ -130,7 +130,7 @@ export default function CalendarPage() {
     if (!confirm("Riprogrammare tutti gli interventi da capo? Gli appuntamenti extra saranno rispettati.")) return;
     setRescheduling(true);
     try {
-      const r = await reschedulePlan({ workdays_only: true, max_days_per_client_block: 3 });
+      const r = await reschedulePlan({ workdays_only: true, max_days_per_client_block: 1 });
       toast.success(`Riprogrammati ${r.planned} interventi`);
       load();
     } catch (_e) { toast.error("Errore riprogrammazione"); }
