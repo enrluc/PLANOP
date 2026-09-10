@@ -519,66 +519,66 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
         # Riduci rem del numero di date riservate: il loop pianifica solo i giorni "iniziali"
         rem_body = max(0, rem - len(reserved_end))
         contract_full = False
+        # Body interventions: cadenza MENSILE - 1 al mese partendo da start_date
         while rem_body > 0 and not contract_full:
-            block = min(max_block, rem_body)
-            for _ in range(block):
-                # Skip weekends + booked
-                if payload.workdays_only:
-                    while cur.weekday() >= 5 or cur.isoformat() in booked_dates:
-                        cur = cur + timedelta(days=1)
-                        if c_deadline and cur > c_deadline:
-                            break
-                else:
-                    while cur.isoformat() in booked_dates:
-                        cur = cur + timedelta(days=1)
-                        if c_deadline and cur > c_deadline:
-                            break
+            # Skip weekends + booked
+            if payload.workdays_only:
+                while cur.weekday() >= 5 or cur.isoformat() in booked_dates:
+                    cur = cur + timedelta(days=1)
+                    if c_deadline and cur > c_deadline:
+                        break
+            else:
+                while cur.isoformat() in booked_dates:
+                    cur = cur + timedelta(days=1)
+                    if c_deadline and cur > c_deadline:
+                        break
+            if c_deadline and cur > c_deadline:
+                skipped.append({"contract_id": c["id"], "reason": "deadline_reached", "remaining": rem_body})
+                contract_full = True
+                break
+            # Enforce max_per_month cap
+            if max_pm:
+                mkey = (c["id"], cur.isoformat()[:7])
+                while per_month_count.get(mkey, 0) >= max_pm:
+                    nxt_month = cur.replace(day=1) + timedelta(days=32)
+                    cur = nxt_month.replace(day=1)
+                    if c_deadline and cur > c_deadline:
+                        break
+                    if payload.workdays_only:
+                        while cur.weekday() >= 5 or cur.isoformat() in booked_dates:
+                            cur = cur + timedelta(days=1)
+                            if c_deadline and cur > c_deadline:
+                                break
+                    else:
+                        while cur.isoformat() in booked_dates:
+                            cur = cur + timedelta(days=1)
+                            if c_deadline and cur > c_deadline:
+                                break
+                    if c_deadline and cur > c_deadline:
+                        break
+                    mkey = (c["id"], cur.isoformat()[:7])
                 if c_deadline and cur > c_deadline:
                     skipped.append({"contract_id": c["id"], "reason": "deadline_reached", "remaining": rem_body})
                     contract_full = True
                     break
-                # Enforce max_per_month cap
-                if max_pm:
-                    mkey = (c["id"], cur.isoformat()[:7])
-                    while per_month_count.get(mkey, 0) >= max_pm:
-                        nxt_month = cur.replace(day=1) + timedelta(days=32)
-                        cur = nxt_month.replace(day=1)
-                        if c_deadline and cur > c_deadline:
-                            break
-                        if payload.workdays_only:
-                            while cur.weekday() >= 5 or cur.isoformat() in booked_dates:
-                                cur = cur + timedelta(days=1)
-                                if c_deadline and cur > c_deadline:
-                                    break
-                        else:
-                            while cur.isoformat() in booked_dates:
-                                cur = cur + timedelta(days=1)
-                                if c_deadline and cur > c_deadline:
-                                    break
-                        if c_deadline and cur > c_deadline:
-                            break
-                        mkey = (c["id"], cur.isoformat()[:7])
-                    if c_deadline and cur > c_deadline:
-                        skipped.append({"contract_id": c["id"], "reason": "deadline_reached", "remaining": rem_body})
-                        contract_full = True
-                        break
-                iv = Intervention(
-                    user_id=user["user_id"],
-                    contract_id=c["id"],
-                    client_id=c["client_id"],
-                    date=cur.isoformat(),
-                    slot="full",
-                    day_index=done_for_contract + 1,
-                )
-                new_interventions.append(iv.model_dump())
-                booked_dates.add(cur.isoformat())
-                if max_pm:
-                    mkey = (c["id"], cur.isoformat()[:7])
-                    per_month_count[mkey] = per_month_count.get(mkey, 0) + 1
-                done_for_contract += 1
-                # Spacing: within same contract avoid consecutive days (skip 1 workday between interventions)
-                cur = cur + timedelta(days=2)
-                rem_body -= 1
+            iv = Intervention(
+                user_id=user["user_id"],
+                contract_id=c["id"],
+                client_id=c["client_id"],
+                date=cur.isoformat(),
+                slot="full",
+                day_index=done_for_contract + 1,
+            )
+            new_interventions.append(iv.model_dump())
+            booked_dates.add(cur.isoformat())
+            if max_pm:
+                mkey = (c["id"], cur.isoformat()[:7])
+                per_month_count[mkey] = per_month_count.get(mkey, 0) + 1
+            done_for_contract += 1
+            # CADENZA MENSILE: salta al 1° del mese successivo
+            nxt_month = cur.replace(day=1) + timedelta(days=32)
+            cur = nxt_month.replace(day=1)
+            rem_body -= 1
         # Append reserved end interventions with the correct final day_index
         for day_idx, dt, slot in reserved_end:
             iv = Intervention(
