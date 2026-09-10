@@ -2,77 +2,78 @@
 
 ## Original Problem Statement
 > Vorrei creare una app che a partire dal contratto firmato per una attività che prevede un certo numero di giorni di lavoro mi crei un planning da inserire a calendario Google. Il planning deve tenere conto di altri contratti e relative date stabilite e da stabilire, della località delle sedi dei clienti in modo da generare gli interventi per ottimizzare gli spostamenti ed altre esigenze future.
-> Aggiunta: appuntamenti extra + riprogrammazione, fattura fine lavori, integrazione InvoicexPLUS.
 
 ## Persona
-Consulente/freelance italiano che gestisce interventi presso più clienti, con contratti a giorni, sedi geograficamente sparse, scadenze e imprevisti. Deploy: web app su Emergent, uso personale.
+Consulente/freelance italiano che gestisce interventi presso più clienti. Deploy: web app su Emergent, uso personale singolo (enrluc@gmail.com).
 
 ## Implementation Status (2026-02)
 ### Core planning
-- [x] Emergent Google Auth (session cookie + Bearer)
-- [x] Clients CRUD + geocoding OSM (con `codice_cliente`, CAP, prov, P.IVA, C.F., Cod.Dest SdI, PEC)
-- [x] Contracts CRUD (con `numero_preventivo`) + status lifecycle (active → planned → completed → invoiced)
-- [x] Planning generator (haversine + priority + workdays only + blocks)
-- [x] Manual events + reschedule-all
-- [x] Vista Calendario mensile con eventi extra + click su cella per aggiungere
-- [x] ICS export + subscribe URL (https)
+- [x] Emergent Google Auth
+- [x] Clients CRUD + geocoding OSM (codice_cliente, CAP, prov, P.IVA, C.F., Cod.Dest SdI, PEC)
+- [x] Contracts CRUD (numero_preventivo, intervention_slot, max_per_month) + status
+- [x] Planning generator (haversine + priority + workdays + blocks + slot + max/mese)
+- [x] Manual events + reschedule-all + Google Calendar iCal sync
+- [x] Vista Calendario mensile con click cella
+- [x] Vista Mappa con Leaflet + OpenStreetMap + toggle percorso interventi
 - [x] Dashboard con stats + upcoming
 
 ### AI (Claude Haiku 4.5)
-- [x] /api/ai/analyze-contract da testo → JSON strutturato
-- [x] /api/ai/analyze-contract-pdf upload PDF firmato → estrazione automatica
-- [x] /api/ai/planning-chat con contesto reale + history persistente
-- [x] /api/ai/draft email/note contestuali
-- [x] Pagina AI Assistant con 2 tab (Chat + Analizza)
-- [x] Bottoni "Importa da PDF" in Clienti e Contratti
+- [x] Analyze contract (testo + PDF upload)
+- [x] Planning chat con contesto reale + history
+- [x] Draft email/note contestuali
+
+### Appuntamenti - Nuovo workflow
+- [x] Fasce orarie: mattina (09:00-13:30), pomeriggio (14:30-18:00), giornata intera (09:00-18:00)
+- [x] Status intervento: pianificato → confermato → done
+- [x] Bottone "Conferma + email" in Planning: cambia stato E invia email di conferma al cliente
+- [x] Reminder 24h prima (cron 09:00 Europe/Rome) SOLO per interventi confermati
+- [x] Icons e color coding nel Calendario per stato
+
+### Email (Resend gestito Emergent)
+- [x] Email di conferma appuntamento (istantanea alla conferma)
+- [x] Email di reminder 24h prima (cron giornaliero)
+- [x] Preferenze utente + log invii + email di test
 
 ### Google Calendar
-- [x] Sync via URL iCal privato (settings + endpoint POST /gcal/sync)
-- [x] Cron giornaliero 08:00 Europe/Rome → /api/cron/gcal-sync
+- [x] Sync via URL iCal privato (cron 08:00 Europe/Rome)
 - [x] Eventi Google bloccano date nel planning
-
-### Email Reminder (Resend gestito Emergent)
-- [x] /api/cron/reminders → invia 24h prima ai clienti
-- [x] Cron giornaliero 09:00 Europe/Rome
-- [x] Preferenze utente (attivo, dest cliente, copia owner)
-- [x] Email di test + log invii
+- [x] Export ICS con orari VEVENT precisi per slot
 
 ### Fatturazione + Invoicex PLUS
-- [x] Dati emittente in Settings (P.IVA, C.F., regime fiscale RF01/RF19, ATECO, sede)
+- [x] Dati emittente (P.IVA, C.F., regime fiscale, ATECO, sede)
 - [x] Fattura PDF (reportlab)
-- [x] Export FatturaPA XML v1.2.2 (FPR12) importabile in Invoicex/SdI
-- [x] Export CSV clienti formato Invoicex (BOM UTF-8, separatore `;`)
-- [x] Import CSV clienti con matching per codice_cliente > P.IVA > nome
-- [x] Import CSV preventivi con matching cliente per P.IVA > nome
-- [x] Modelli CSV scaricabili con esempi
+- [x] Export FatturaPA XML v1.2.2 (FPR12) importabile Invoicex/SdI
+- [x] Export CSV clienti formato Invoicex
+- [x] Import CSV clienti (matching per codice_cliente > P.IVA > nome)
+- [x] Import CSV preventivi (matching cliente per P.IVA > nome)
+- [x] **Import massivo FatturaPA XML da Aruba** → estrae automaticamente Cedente + Cessionario in anagrafica
 
 ## Verified Backend Endpoints
-- Auth: POST /api/auth/session, GET /api/auth/me, POST /api/auth/logout
-- Clients: /api/clients (GET/POST/PUT/DELETE)
-- Contracts: /api/contracts (GET/POST/PUT/DELETE, /complete)
-- Planning: /api/planning/generate, /api/planning/reschedule
-- Manual events: /api/manual-events (GET/POST/DELETE)
-- Interventions: /api/interventions (GET/DELETE)
-- Calendar: /api/calendar/subscribe-url, /api/calendar/export.ics
+- Auth: /api/auth/* 
+- Clients: /api/clients/*
+- Contracts: /api/contracts/*
+- Planning: /api/planning/generate, /reschedule
+- Interventions: /api/interventions/*, /api/interventions/{id}/confirm, /api/interventions/{id}/unconfirm
+- Manual events: /api/manual-events/*
+- Calendar: /api/calendar/*
 - Invoices: /api/invoices/generate
 - Dashboard: /api/dashboard/stats
-- AI: /api/ai/analyze-contract, /analyze-contract-pdf, /planning-chat, /chat-history, /draft
-- Reminders: /api/reminders/prefs, /reminders/test, /reminders/log, /cron/reminders
-- GCal: /api/gcal/settings, /gcal/sync, /cron/gcal-sync
+- AI: /api/ai/analyze-contract, /analyze-contract-pdf, /planning-chat, /draft
+- Reminders: /api/reminders/*, /api/cron/reminders
+- GCal: /api/gcal/*, /api/cron/gcal-sync
 - Issuer: /api/settings/issuer
 - Export: /api/export/invoicex/clients.csv, /api/export/fatturapa/{contract_id}
-- Import: /api/import/clients-template.csv, /api/import/contracts-template.csv, /api/import/clients, /api/import/contracts
+- Import: /api/import/clients-template.csv, /contracts-template.csv, /clients, /contracts, /fatturapa-xml
 
 ## Deployment
-- Deployment agent: PASS (2026-02)
-- Cron: 2 scheduled tasks in /app/.emergent/crons.yml (reminder 09:00, gcal-sync 08:00 Europe/Rome)
-- Pronto per Deploy Emergent tier_0 (~$12-15/mese stimato)
+- Deployment agent: PASS
+- Cron: 2 tasks in /app/.emergent/crons.yml (reminder 09:00, gcal-sync 08:00 Europe/Rome)
+- Pronto per Deploy Emergent
 
 ## Prioritized Backlog
-- P1: Real-time map view of clients + interventions
-- P1: Manual event with time slot UI
-- P1: Fattura elettronica XML SDI: validatore inline prima del download
-- P2: Notifiche push mobile
-- P2: Export Danea Easyfatt-XML alternativo a FatturaPA
-- P2: Export TeamSystem FATSEQ per commercialisti
+- P1: Manual event con slot orario UI (mezze giornate manuali)
+- P1: Visualizzazione dettagli intervento con click su cella calendario
+- P2: Notifiche push mobile / PWA
+- P2: Export Danea Easyfatt-XML / TeamSystem FATSEQ
+- P2: Aruba REST API integration (richiede AuthToken enterprise)
 - P2: Firma digitale integrata su fatture PDF

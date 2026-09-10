@@ -8,9 +8,9 @@ import { Textarea } from "../components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from "../components/ui/dialog";
-import { Plus, MapPin, Phone, Mail, Trash2, Edit3, Upload, Loader2, Download, FileDown } from "lucide-react";
+import { Plus, MapPin, Phone, Mail, Trash2, Edit3, Upload, Loader2, Download, FileDown, FileCode } from "lucide-react";
 import { toast } from "sonner";
-import { exportClientsCsvUrl, clientsTemplateCsvUrl, importClientsCsv } from "../lib/api";
+import { exportClientsCsvUrl, clientsTemplateCsvUrl, importClientsCsv, importFatturaPaXml } from "../lib/api";
 
 const empty = { codice_cliente: "", name: "", address: "", city: "", cap: "", provincia: "", contact_name: "", phone: "", email: "", piva: "", codice_fiscale: "", codice_destinatario: "", pec: "", notes: "" };
 
@@ -22,9 +22,22 @@ export default function Clients() {
   const [importing, setImporting] = useState(false);
   const fileRef = useRef(null);
   const csvRef = useRef(null);
+  const xmlRef = useRef(null);
 
   const load = () => listClients().then(setItems).catch(() => {});
   useEffect(() => { load(); }, []);
+
+  const handleImportXml = async (files) => {
+    if (!files || files.length === 0) return;
+    setImporting(true);
+    try {
+      const r = await importFatturaPaXml(files);
+      toast.success(`${r.imported} nuovi, ${r.updated} aggiornati, ${r.skipped} saltati (${r.files_total} file)`);
+      if (r.errors?.length) r.errors.slice(0, 3).forEach((m) => toast.error(m));
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Import XML fallito"); }
+    finally { setImporting(false); if (xmlRef.current) xmlRef.current.value = ""; }
+  };
 
   const handleImportCsv = async (file) => {
     if (!file) return;
@@ -128,6 +141,24 @@ export default function Clients() {
             data-testid="client-csv-input"
             onChange={(e) => handleImportCsv(e.target.files?.[0])}
           />
+          <input
+            ref={xmlRef}
+            type="file"
+            accept=".xml,application/xml,text/xml"
+            multiple
+            className="hidden"
+            data-testid="client-xml-input"
+            onChange={(e) => handleImportXml(Array.from(e.target.files || []))}
+          />
+          <Button
+            data-testid="import-fatturapa-xml-button"
+            variant="outline"
+            onClick={() => xmlRef.current?.click()}
+            disabled={importing}
+          >
+            <FileCode className="w-4 h-4 mr-2" />
+            Import Aruba XML
+          </Button>
           <Button
             data-testid="clients-template-button"
             variant="outline"

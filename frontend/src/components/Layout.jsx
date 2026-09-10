@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/AuthContext";
 import {
-  LayoutDashboard, FileText, Users, CalendarDays, Route, Receipt, LogOut, Sparkles, Settings,
+  LayoutDashboard, FileText, Users, CalendarDays, Route, Receipt, LogOut, Sparkles, Settings, Map,
 } from "lucide-react";
 import { Button } from "./ui/button";
 
@@ -9,6 +9,7 @@ const NAV = [
   { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, testid: "nav-dashboard" },
   { to: "/contracts", label: "Contratti", icon: FileText, testid: "nav-contracts" },
   { to: "/clients", label: "Clienti", icon: Users, testid: "nav-clients" },
+  { to: "/map", label: "Mappa", icon: Map, testid: "nav-map" },
   { to: "/planning", label: "Planning", icon: Route, testid: "nav-planning" },
   { to: "/calendar", label: "Calendario", icon: CalendarDays, testid: "nav-calendar" },
   { to: "/ai", label: "AI Assistant", icon: Sparkles, testid: "nav-ai" },

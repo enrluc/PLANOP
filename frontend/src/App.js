@@ -9,6 +9,7 @@ import Contracts from "@/pages/Contracts";
 import Clients from "@/pages/Clients";
 import Planning from "@/pages/Planning";
 import CalendarPage from "@/pages/CalendarPage";
+import MapPage from "@/pages/MapPage";
 import Invoices from "@/pages/Invoices";
 import AIAssistant from "@/pages/AIAssistant";
 import SettingsPage from "@/pages/Settings";
@@ -36,6 +37,7 @@ function AppRouter() {
         <Route path="clients" element={<Clients />} />
         <Route path="planning" element={<Planning />} />
         <Route path="calendar" element={<CalendarPage />} />
+        <Route path="map" element={<MapPage />} />
         <Route path="ai" element={<AIAssistant />} />
         <Route path="invoices" element={<Invoices />} />
         <Route path="settings" element={<SettingsPage />} />

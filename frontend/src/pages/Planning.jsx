@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { generatePlan, reschedulePlan, listInterventions, listContracts, listClients } from "../lib/api";
+import { generatePlan, reschedulePlan, listInterventions, listContracts, listClients, confirmIntervention, unconfirmIntervention } from "../lib/api";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
-import { Route, Play, MapPin, CalendarClock, RefreshCw } from "lucide-react";
+import { Route, Play, MapPin, CalendarClock, RefreshCw, CheckCircle2, Mail } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Planning() {
@@ -147,21 +147,58 @@ export default function Planning() {
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wider text-slate-500">
                   <th className="py-2 pr-4">Data</th>
+                  <th className="py-2 pr-4">Orario</th>
                   <th className="py-2 pr-4">Cliente</th>
                   <th className="py-2 pr-4">Contratto</th>
-                  <th className="py-2 pr-4">Giorno</th>
+                  <th className="py-2 pr-4">Stato</th>
+                  <th className="py-2 pr-4">Azioni</th>
                 </tr>
               </thead>
               <tbody>
-                {ivs.slice(0, 30).map((iv) => {
+                {ivs.slice(0, 40).map((iv) => {
                   const c = contractFor(iv.contract_id);
                   const cli = clientFor(iv.client_id);
+                  const slot = iv.slot || "full";
+                  const slotLabel = slot === "morning" ? "09:00-13:30" : slot === "afternoon" ? "14:30-18:00" : "09:00-18:00";
+                  const confirmed = iv.status === "confirmed";
+                  const doConfirm = async () => {
+                    try {
+                      const r = await confirmIntervention(iv.id);
+                      if (r.warning) toast.warning(r.warning);
+                      else toast.success("Confermato ed email inviata al cliente");
+                      load();
+                    } catch (e) { toast.error(e?.response?.data?.detail || "Errore"); }
+                  };
+                  const doUnconfirm = async () => {
+                    try { await unconfirmIntervention(iv.id); toast.success("Riportato a pianificato"); load(); }
+                    catch (_e) { toast.error("Errore"); }
+                  };
                   return (
-                    <tr key={iv.id} className="border-b border-slate-100">
+                    <tr key={iv.id} data-testid={`plan-intervention-${iv.id}`} className="border-b border-slate-100">
                       <td className="py-2 pr-4 font-mono text-xs">{iv.date}</td>
+                      <td className="py-2 pr-4 text-xs text-slate-600 font-mono">{slotLabel}</td>
                       <td className="py-2 pr-4">{cli?.name || "—"}</td>
-                      <td className="py-2 pr-4 text-slate-600">{c?.title || "—"}</td>
-                      <td className="py-2 pr-4">{iv.day_index}/{c?.total_days || "?"}</td>
+                      <td className="py-2 pr-4 text-slate-600 truncate max-w-xs">{c?.title || "—"}</td>
+                      <td className="py-2 pr-4">
+                        {confirmed ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-md font-medium uppercase tracking-wide">
+                            <CheckCircle2 className="w-3 h-3" /> Confermato
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md font-medium uppercase tracking-wide">Pianificato</span>
+                        )}
+                      </td>
+                      <td className="py-2 pr-4">
+                        {confirmed ? (
+                          <Button data-testid={`unconfirm-${iv.id}`} variant="ghost" size="sm" onClick={doUnconfirm} className="h-7 text-xs">
+                            Annulla conferma
+                          </Button>
+                        ) : (
+                          <Button data-testid={`confirm-${iv.id}`} variant="outline" size="sm" onClick={doConfirm} className="h-7 text-xs">
+                            <Mail className="w-3 h-3 mr-1" /> Conferma + email
+                          </Button>
+                        )}
+                      </td>
                     </tr>
                   );
                 })}

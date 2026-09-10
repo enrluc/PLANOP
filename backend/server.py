@@ -184,6 +184,8 @@ class Contract(BaseModel):
     total_days: int
     daily_rate: float = 0
     intervention_type: str = "consulenza"
+    intervention_slot: str = "full"  # full | morning | afternoon
+    max_per_month: Optional[int] = None  # limite interventi al mese
     priority: str = "medium"  # high, medium, low
     start_date: Optional[str] = None  # ISO date
     deadline: Optional[str] = None  # ISO date
@@ -200,6 +202,8 @@ class ContractIn(BaseModel):
     total_days: int
     daily_rate: float = 0
     intervention_type: str = "consulenza"
+    intervention_slot: str = "full"
+    max_per_month: Optional[int] = None
     priority: str = "medium"
     start_date: Optional[str] = None
     deadline: Optional[str] = None
@@ -213,8 +217,11 @@ class Intervention(BaseModel):
     contract_id: str
     client_id: str
     date: str  # YYYY-MM-DD
+    slot: str = "full"  # full | morning | afternoon
     day_index: int  # 1..total_days
-    status: str = "planned"  # planned, done
+    status: str = "planned"  # planned | confirmed | done | cancelled
+    confirmed_at: Optional[str] = None
+    confirmation_email_id: Optional[str] = None
     notes: Optional[str] = ""
 
 
@@ -443,30 +450,54 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
     cur = start
     new_interventions = []
     max_block = max(1, payload.max_days_per_client_block)
+    # Count interventions per (contract_id, YYYY-MM) to enforce max_per_month
+    per_month_count = {}
+    for iv in existing:
+        month_key = iv["date"][:7]
+        per_month_count[(iv["contract_id"], month_key)] = per_month_count.get((iv["contract_id"], month_key), 0) + 1
     for item in ordered:
         c = item["contract"]
         rem = item["remaining"]
-        # Split into blocks of max_block
+        slot = c.get("intervention_slot", "full") or "full"
+        max_pm = c.get("max_per_month")
         done_for_contract = planned_per_contract.get(c["id"], 0)
         while rem > 0:
             block = min(max_block, rem)
             for _ in range(block):
-                # Skip weekends
+                # Skip weekends + booked + max-per-month cap
                 if payload.workdays_only:
                     while cur.weekday() >= 5 or cur.isoformat() in booked_dates:
                         cur = cur + timedelta(days=1)
                 else:
                     while cur.isoformat() in booked_dates:
                         cur = cur + timedelta(days=1)
+                # Enforce max_per_month cap
+                if max_pm:
+                    mkey = (c["id"], cur.isoformat()[:7])
+                    while per_month_count.get(mkey, 0) >= max_pm:
+                        # move to next month day 1
+                        nxt_month = cur.replace(day=1) + timedelta(days=32)
+                        cur = nxt_month.replace(day=1)
+                        if payload.workdays_only:
+                            while cur.weekday() >= 5 or cur.isoformat() in booked_dates:
+                                cur = cur + timedelta(days=1)
+                        else:
+                            while cur.isoformat() in booked_dates:
+                                cur = cur + timedelta(days=1)
+                        mkey = (c["id"], cur.isoformat()[:7])
                 iv = Intervention(
                     user_id=user["user_id"],
                     contract_id=c["id"],
                     client_id=c["client_id"],
                     date=cur.isoformat(),
+                    slot=slot,
                     day_index=done_for_contract + 1,
                 )
                 new_interventions.append(iv.model_dump())
                 booked_dates.add(cur.isoformat())
+                if max_pm:
+                    mkey = (c["id"], cur.isoformat()[:7])
+                    per_month_count[mkey] = per_month_count.get(mkey, 0) + 1
                 done_for_contract += 1
                 cur = cur + timedelta(days=1)
                 rem -= 1
@@ -486,6 +517,97 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
 async def list_interventions(user=Depends(get_current_user)):
     docs = await db.interventions.find({"user_id": user["user_id"]}, {"_id": 0}).sort("date", 1).to_list(2000)
     return docs
+
+
+def _slot_label(slot: str) -> str:
+    return {"morning": "Mattina (09:00 - 13:30)",
+            "afternoon": "Pomeriggio (14:30 - 18:00)",
+            "full": "Giornata intera (09:00 - 18:00)"}.get(slot or "full", "Giornata intera (09:00 - 18:00)")
+
+
+def _confirmation_html(client_name: str, intervention_date: str, slot: str,
+                       contract_title: str, day_index: int, total_days: int,
+                       address: str) -> str:
+    safe_client = escape(client_name)
+    safe_title = escape(contract_title)
+    safe_date = escape(intervention_date)
+    safe_addr = escape(address or "")
+    safe_from = escape(EMAIL_FROM_NAME)
+    safe_slot = escape(_slot_label(slot))
+    return (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+        f'<tr><td style="padding:24px;font-family:Arial,sans-serif;color:#0F172A">'
+        f'<h2 style="margin:0 0 12px 0;color:#059669">Conferma appuntamento</h2>'
+        f'<p>Gentile {safe_client},</p>'
+        f'<p>confermiamo il nostro intervento presso la vostra sede ({safe_addr}) '
+        f'nell&#39;ambito del contratto <strong>{safe_title}</strong>.</p>'
+        f'<div style="background:#ECFDF5;padding:12px;border-radius:6px;margin:16px 0;border-left:3px solid #059669">'
+        f'<p style="margin:0"><strong>Data:</strong> {safe_date}</p>'
+        f'<p style="margin:4px 0 0 0"><strong>Orario:</strong> {safe_slot}</p>'
+        f'<p style="margin:4px 0 0 0"><strong>Giornata:</strong> {day_index} di {total_days}</p>'
+        f'</div>'
+        f'<p>Riceverete un ulteriore promemoria 24 ore prima. Per qualsiasi variazione, rispondere pure a questa email.</p>'
+        f'<p style="margin-top:24px">Cordiali saluti,<br>{safe_from}</p>'
+        f'<hr style="border:none;border-top:1px solid #E2E8F0;margin:20px 0">'
+        f'<p style="font-size:11px;color:#64748B">Email inviata da {safe_from}. Non chiediamo mai password, codici o dati di pagamento via email.</p>'
+        f'</td></tr></table>'
+    )
+
+
+@api_router.post("/interventions/{intervention_id}/confirm")
+async def confirm_intervention(intervention_id: str, user=Depends(get_current_user)):
+    """Mark an intervention as confirmed and send confirmation email to the client."""
+    iv = await db.interventions.find_one({"id": intervention_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not iv:
+        raise HTTPException(404, "Intervento non trovato")
+    client = await db.clients.find_one({"id": iv["client_id"]}, {"_id": 0})
+    contract = await db.contracts.find_one({"id": iv["contract_id"]}, {"_id": 0})
+    if not client or not contract:
+        raise HTTPException(400, "Cliente o contratto non trovato")
+
+    email_id = None
+    warning = None
+    if client.get("email"):
+        try:
+            html = _confirmation_html(
+                client_name=client.get("name", "Cliente"),
+                intervention_date=iv["date"],
+                slot=iv.get("slot", "full"),
+                contract_title=contract.get("title", ""),
+                day_index=iv.get("day_index", 1),
+                total_days=contract.get("total_days", 0),
+                address=f"{client.get('address','')} {client.get('city','')}".strip(),
+            )
+            email_id = await send_email(
+                to=client["email"],
+                subject=f"Conferma intervento {iv['date']} - {contract.get('title','')[:50]}",
+                html=html,
+            )
+        except HTTPException as e:
+            warning = f"Email non inviata: {e.detail}"
+    else:
+        warning = "Cliente senza email in anagrafica"
+
+    await db.interventions.update_one(
+        {"id": intervention_id},
+        {"$set": {
+            "status": "confirmed",
+            "confirmed_at": datetime.now(timezone.utc).isoformat(),
+            "confirmation_email_id": email_id,
+        }},
+    )
+    return {"ok": True, "email_id": email_id, "warning": warning}
+
+
+@api_router.post("/interventions/{intervention_id}/unconfirm")
+async def unconfirm_intervention(intervention_id: str, user=Depends(get_current_user)):
+    result = await db.interventions.update_one(
+        {"id": intervention_id, "user_id": user["user_id"]},
+        {"$set": {"status": "planned", "confirmed_at": None, "confirmation_email_id": None}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Intervento non trovato")
+    return {"ok": True}
 
 
 @api_router.delete("/interventions/{intervention_id}")
@@ -597,15 +719,25 @@ async def export_ics(user_id: str, token: str):
         c = contracts_map.get(iv["contract_id"], {})
         cli = clients_map.get(iv["client_id"], {})
         d = iv["date"].replace("-", "")
-        dt_next = (datetime.fromisoformat(iv["date"]).date() + timedelta(days=1)).isoformat().replace("-", "")
-        summary = f"{c.get('title', 'Intervento')} @ {cli.get('name', '')}"
+        slot = iv.get("slot", "full")
+        # Slot times: morning 09:00-13:30, afternoon 14:30-18:00, full 09:00-18:00
+        if slot == "morning":
+            dtstart = f"{d}T090000"; dtend = f"{d}T133000"
+            slot_label = "Mattina"
+        elif slot == "afternoon":
+            dtstart = f"{d}T143000"; dtend = f"{d}T180000"
+            slot_label = "Pomeriggio"
+        else:
+            dtstart = f"{d}T090000"; dtend = f"{d}T180000"
+            slot_label = "Giornata intera"
+        summary = f"[{slot_label}] {c.get('title', 'Intervento')} @ {cli.get('name', '')}"
         loc = f"{cli.get('address','')}, {cli.get('city','')}"
-        desc = f"Contratto: {c.get('title','')}\\nGiorno {iv['day_index']}/{c.get('total_days','')}\\nReferente: {cli.get('contact_name','')} {cli.get('phone','')}"
+        desc = f"Contratto: {c.get('title','')}\\nGiorno {iv['day_index']}/{c.get('total_days','')}\\nSlot: {slot_label}\\nReferente: {cli.get('contact_name','')} {cli.get('phone','')}"
         lines += [
             "BEGIN:VEVENT",
             f"UID:{iv['id']}@planop",
-            f"DTSTART;VALUE=DATE:{d}",
-            f"DTEND;VALUE=DATE:{dt_next}",
+            f"DTSTART;TZID=Europe/Rome:{dtstart}",
+            f"DTEND;TZID=Europe/Rome:{dtend}",
             f"SUMMARY:{summary}",
             f"LOCATION:{loc}",
             f"DESCRIPTION:{desc}",
@@ -1152,7 +1284,10 @@ async def _send_daily_reminders(run_id: str):
     """Background: find tomorrow's interventions and send emails per user prefs.
     Idempotent via run_id + intervention_id."""
     tomorrow = (date.today() + timedelta(days=1)).isoformat()
-    ivs = await db.interventions.find({"date": tomorrow}, {"_id": 0}).to_list(2000)
+    # Only send reminders for CONFIRMED interventions
+    ivs = await db.interventions.find(
+        {"date": tomorrow, "status": "confirmed"}, {"_id": 0}
+    ).to_list(2000)
     if not ivs:
         return
     # Bulk fetch clients, contracts, prefs
@@ -1536,6 +1671,139 @@ async def import_contracts(file: UploadFile = File(...), user=Depends(get_curren
         await db.contracts.insert_one(doc)
         imported += 1
     return {"imported": imported, "errors": errors[:20], "rows_total": len(rows)}
+
+
+# =============== ARUBA / FATTURAPA XML IMPORT (bulk anagrafica) ===============
+
+def _xml_text(el, tag: str) -> str:
+    if el is None:
+        return ""
+    for child in el.iter():
+        if child.tag.split("}")[-1] == tag:
+            return (child.text or "").strip()
+    return ""
+
+
+def _extract_anagrafica_from_xml(raw: bytes) -> list:
+    """Parse a FatturaPA XML and extract Cedente + Cessionario as client dicts."""
+    import xml.etree.ElementTree as ET
+    try:
+        root = ET.fromstring(raw)
+    except Exception:
+        return []
+    results = []
+    for role_tag in ("CedentePrestatore", "CessionarioCommittente"):
+        for el in root.iter():
+            if el.tag.split("}")[-1] == role_tag:
+                dati = None
+                sede = None
+                contatti = None
+                for c in el:
+                    t = c.tag.split("}")[-1]
+                    if t == "DatiAnagrafici":
+                        dati = c
+                    elif t == "Sede":
+                        sede = c
+                    elif t == "Contatti":
+                        contatti = c
+                name = ""
+                piva = ""
+                cf = ""
+                if dati is not None:
+                    piva = _xml_text(dati, "IdCodice")
+                    cf = _xml_text(dati, "CodiceFiscale")
+                    denom = _xml_text(dati, "Denominazione")
+                    nome = _xml_text(dati, "Nome")
+                    cognome = _xml_text(dati, "Cognome")
+                    name = denom or f"{nome} {cognome}".strip()
+                if not name and not piva and not cf:
+                    continue
+                addr = _xml_text(sede, "Indirizzo") if sede is not None else ""
+                cap = _xml_text(sede, "CAP") if sede is not None else ""
+                citta = _xml_text(sede, "Comune") if sede is not None else ""
+                prov = _xml_text(sede, "Provincia") if sede is not None else ""
+                phone = _xml_text(contatti, "Telefono") if contatti is not None else ""
+                email = _xml_text(contatti, "Email") if contatti is not None else ""
+                results.append({
+                    "name": name or piva or cf,
+                    "address": addr or "N/D",
+                    "city": citta, "cap": cap, "provincia": prov,
+                    "piva": piva, "codice_fiscale": cf,
+                    "phone": phone, "email": email,
+                    "codice_destinatario": "", "pec": "",
+                    "contact_name": "", "notes": "",
+                })
+    return results
+
+
+@api_router.post("/import/fatturapa-xml")
+async def import_fatturapa_xml(files: List[UploadFile] = File(...), user=Depends(get_current_user)):
+    """Upload FatturaPA XML file(s) from Aruba (or any other provider) - extracts anagrafica.
+    Supports .xml. Deduplicates against existing clients by P.IVA/C.F./name."""
+    if not files:
+        raise HTTPException(400, "Nessun file")
+    imported = 0
+    updated = 0
+    skipped = 0
+    errors = []
+    seen_ids = set()  # (piva, cf, name) tuples within this batch
+    for f in files:
+        fname = (f.filename or "").lower()
+        if not fname.endswith(".xml"):
+            errors.append(f"{f.filename}: non è un XML")
+            continue
+        raw = await f.read()
+        if len(raw) > 5 * 1024 * 1024:
+            errors.append(f"{f.filename}: troppo grande (max 5MB)")
+            continue
+        anags = _extract_anagrafica_from_xml(raw)
+        if not anags:
+            errors.append(f"{f.filename}: nessuna anagrafica riconosciuta")
+            continue
+        for a in anags:
+            key = (a.get("piva", ""), a.get("codice_fiscale", ""), a.get("name", ""))
+            if key in seen_ids:
+                continue
+            seen_ids.add(key)
+            existing = None
+            if a.get("piva"):
+                existing = await db.clients.find_one(
+                    {"user_id": user["user_id"], "piva": a["piva"]}, {"_id": 0})
+            if not existing and a.get("codice_fiscale"):
+                existing = await db.clients.find_one(
+                    {"user_id": user["user_id"], "codice_fiscale": a["codice_fiscale"]}, {"_id": 0})
+            if not existing and a.get("name"):
+                existing = await db.clients.find_one(
+                    {"user_id": user["user_id"], "name": {"$regex": f"^{re.escape(a['name'])}$", "$options": "i"}},
+                    {"_id": 0})
+            # Skip if it's the issuer (same P.IVA as our own settings)
+            issuer = await db.issuer_settings.find_one({"user_id": user["user_id"]}, {"_id": 0}) or {}
+            if a.get("piva") and a["piva"] == issuer.get("piva"):
+                skipped += 1
+                continue
+            if existing:
+                # Fill only missing fields, preserve user edits
+                patch = {}
+                for fld in ("cap", "provincia", "codice_fiscale", "phone", "email"):
+                    if not existing.get(fld) and a.get(fld):
+                        patch[fld] = a[fld]
+                if patch:
+                    await db.clients.update_one({"id": existing["id"]}, {"$set": patch})
+                    updated += 1
+                else:
+                    skipped += 1
+            else:
+                coords = await geocode(a["address"], a.get("city", ""))
+                if coords:
+                    a["lat"] = coords["lat"]
+                    a["lng"] = coords["lng"]
+                doc = {"id": uuid.uuid4().hex, "user_id": user["user_id"],
+                       "codice_cliente": "",
+                       "created_at": datetime.now(timezone.utc).isoformat(), **a}
+                await db.clients.insert_one(doc)
+                imported += 1
+    return {"imported": imported, "updated": updated, "skipped": skipped,
+            "errors": errors[:30], "files_total": len(files)}
 
 
 def _xml_escape(v) -> str:

@@ -26,6 +26,8 @@ export const completeContract = (id) => api.post(`/contracts/${id}/complete`).th
 
 export const generatePlan = (data) => api.post("/planning/generate", data).then((r) => r.data);
 export const listInterventions = () => api.get("/interventions").then((r) => r.data);
+export const confirmIntervention = (id) => api.post(`/interventions/${id}/confirm`).then(r => r.data);
+export const unconfirmIntervention = (id) => api.post(`/interventions/${id}/unconfirm`).then(r => r.data);
 export const clearContractPlan = (contract_id) =>
   api.delete(`/interventions/contract/${contract_id}`).then((r) => r.data);
 export const reschedulePlan = (data) => api.post("/planning/reschedule", data).then((r) => r.data);
@@ -75,6 +77,11 @@ export const importContractsCsv = (file) => {
   const fd = new FormData();
   fd.append("file", file);
   return api.post("/import/contracts", fd, { headers: { "Content-Type": "multipart/form-data" } }).then(r => r.data);
+};
+export const importFatturaPaXml = (files) => {
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f);
+  return api.post("/import/fatturapa-xml", fd, { headers: { "Content-Type": "multipart/form-data" } }).then(r => r.data);
 };
 export const exportFatturaPaUrl = (contract_id, invoice_number) =>
   `${API}/export/fatturapa/${contract_id}${invoice_number ? `?invoice_number=${encodeURIComponent(invoice_number)}` : ""}`;

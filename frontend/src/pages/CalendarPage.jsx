@@ -170,10 +170,18 @@ export default function CalendarPage() {
                     }
                     const clic = cli(it.client_id);
                     const c = ctr(it.contract_id);
+                    const slot = it.slot || "full";
+                    const timeShort = slot === "morning" ? "AM" : slot === "afternoon" ? "PM" : "GG";
+                    const isConfirmed = it.status === "confirmed";
+                    const cls = isConfirmed
+                      ? "bg-emerald-100 text-emerald-800"
+                      : "bg-blue-100 text-blue-800";
                     return (
-                      <div key={it.id} className="text-[10px] leading-tight px-1.5 py-1 bg-blue-100 text-blue-800 rounded truncate">
-                        <span className="font-semibold">{clic?.name?.slice(0, 14) || "—"}</span>
+                      <div key={it.id} className={`text-[10px] leading-tight px-1.5 py-1 rounded truncate ${cls}`}>
+                        <span className="font-mono mr-1">{timeShort}</span>
+                        <span className="font-semibold">{clic?.name?.slice(0, 12) || "—"}</span>
                         <span className="hidden sm:inline"> · g{it.day_index}/{c?.total_days}</span>
+                        {isConfirmed && <span className="ml-1">✓</span>}
                       </div>
                     );
                   })}
