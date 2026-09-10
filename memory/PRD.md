@@ -2,61 +2,77 @@
 
 ## Original Problem Statement
 > Vorrei creare una app che a partire dal contratto firmato per una attività che prevede un certo numero di giorni di lavoro mi crei un planning da inserire a calendario Google. Il planning deve tenere conto di altri contratti e relative date stabilite e da stabilire, della località delle sedi dei clienti in modo da generare gli interventi per ottimizzare gli spostamenti ed altre esigenze future.
-> Aggiunta: possibilità di inserire appuntamenti non previsti e riprogrammare tutto.
-> Potrebbe generare fattura a fine lavori.
+> Aggiunta: appuntamenti extra + riprogrammazione, fattura fine lavori, integrazione InvoicexPLUS.
 
 ## Persona
-Consulente/freelance italiano che gestisce interventi presso più clienti, con contratti a giorni di lavoro, sedi geograficamente sparse, scadenze e imprevisti.
-
-## Core Requirements (Static)
-- Login personale via Emergent Google Auth (single-user)
-- Anagrafica clienti con indirizzo + geocoding OSM (Nominatim)
-- Contratti (cliente, giorni, tariffa, priorità, scadenza, tipologia, note)
-- Planning automatico ottimizzato per prossimità geografica + priorità/scadenze
-- Appuntamenti extra manuali che bloccano date
-- Riprogrammazione completa
-- Vista Calendario mensile con extra events + interventi
-- Sincronizzazione Google Calendar via URL .ics (subscribe)
-- Fattura PDF finale (regime forfettario, IVA, ritenuta d'acconto, marca da bollo)
-
-## AI Integration (2026-02, added later)
-- Emergent LLM Key + Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) via emergentintegrations
-- /api/ai/analyze-contract: estrae JSON strutturato da testo contratto
-- /api/ai/planning-chat: chat assistente con contesto reale (contratti/clienti/interventi)
-- /api/ai/chat-history: persistenza messaggi in Mongo (collection ai_messages)
-- /api/ai/draft: bozza email/note contestuale
-- Frontend: nuova pagina /ai (tab Chat + tab Analizza) collegata dalla sidebar
+Consulente/freelance italiano che gestisce interventi presso più clienti, con contratti a giorni, sedi geograficamente sparse, scadenze e imprevisti. Deploy: web app su Emergent, uso personale.
 
 ## Implementation Status (2026-02)
+### Core planning
 - [x] Emergent Google Auth (session cookie + Bearer)
-- [x] Clients CRUD + geocoding OSM
-- [x] Contracts CRUD + status lifecycle (active → planned → completed → invoiced)
+- [x] Clients CRUD + geocoding OSM (con `codice_cliente`, CAP, prov, P.IVA, C.F., Cod.Dest SdI, PEC)
+- [x] Contracts CRUD (con `numero_preventivo`) + status lifecycle (active → planned → completed → invoiced)
 - [x] Planning generator (haversine + priority + workdays only + blocks)
 - [x] Manual events + reschedule-all
-- [x] Calendar view mensile con extra events
-- [x] ICS export + subscribe URL (https via X-Forwarded-Proto)
-- [x] Invoice PDF con reportlab (forfettario/ordinario)
+- [x] Vista Calendario mensile con eventi extra + click su cella per aggiungere
+- [x] ICS export + subscribe URL (https)
 - [x] Dashboard con stats + upcoming
 
-## Verified Backend Endpoints (Testing agent iter1 + fix)
-- POST /api/auth/session, GET /api/auth/me, POST /api/auth/logout
-- /api/clients (GET/POST/PUT/DELETE)
-- /api/contracts (GET/POST/PUT/DELETE, /complete)
-- /api/planning/generate, /api/planning/reschedule
-- /api/manual-events (GET/POST/DELETE)
-- /api/interventions (GET/DELETE)
-- /api/calendar/subscribe-url, /api/calendar/export.ics
-- /api/invoices/generate
-- /api/dashboard/stats
+### AI (Claude Haiku 4.5)
+- [x] /api/ai/analyze-contract da testo → JSON strutturato
+- [x] /api/ai/analyze-contract-pdf upload PDF firmato → estrazione automatica
+- [x] /api/ai/planning-chat con contesto reale + history persistente
+- [x] /api/ai/draft email/note contestuali
+- [x] Pagina AI Assistant con 2 tab (Chat + Analizza)
+- [x] Bottoni "Importa da PDF" in Clienti e Contratti
 
-## Known Limitations
-- Geocoding: Nominatim may return 403 from server IP → lat/lng null → planning fallback ordering. Non blocking. Consider caching or paid provider.
-- Google Calendar: read-only subscribe (utente incolla URL). Nessuna scrittura diretta OAuth (Emergent Auth non fornisce scope Calendar).
+### Google Calendar
+- [x] Sync via URL iCal privato (settings + endpoint POST /gcal/sync)
+- [x] Cron giornaliero 08:00 Europe/Rome → /api/cron/gcal-sync
+- [x] Eventi Google bloccano date nel planning
+
+### Email Reminder (Resend gestito Emergent)
+- [x] /api/cron/reminders → invia 24h prima ai clienti
+- [x] Cron giornaliero 09:00 Europe/Rome
+- [x] Preferenze utente (attivo, dest cliente, copia owner)
+- [x] Email di test + log invii
+
+### Fatturazione + Invoicex PLUS
+- [x] Dati emittente in Settings (P.IVA, C.F., regime fiscale RF01/RF19, ATECO, sede)
+- [x] Fattura PDF (reportlab)
+- [x] Export FatturaPA XML v1.2.2 (FPR12) importabile in Invoicex/SdI
+- [x] Export CSV clienti formato Invoicex (BOM UTF-8, separatore `;`)
+- [x] Import CSV clienti con matching per codice_cliente > P.IVA > nome
+- [x] Import CSV preventivi con matching cliente per P.IVA > nome
+- [x] Modelli CSV scaricabili con esempi
+
+## Verified Backend Endpoints
+- Auth: POST /api/auth/session, GET /api/auth/me, POST /api/auth/logout
+- Clients: /api/clients (GET/POST/PUT/DELETE)
+- Contracts: /api/contracts (GET/POST/PUT/DELETE, /complete)
+- Planning: /api/planning/generate, /api/planning/reschedule
+- Manual events: /api/manual-events (GET/POST/DELETE)
+- Interventions: /api/interventions (GET/DELETE)
+- Calendar: /api/calendar/subscribe-url, /api/calendar/export.ics
+- Invoices: /api/invoices/generate
+- Dashboard: /api/dashboard/stats
+- AI: /api/ai/analyze-contract, /analyze-contract-pdf, /planning-chat, /chat-history, /draft
+- Reminders: /api/reminders/prefs, /reminders/test, /reminders/log, /cron/reminders
+- GCal: /api/gcal/settings, /gcal/sync, /cron/gcal-sync
+- Issuer: /api/settings/issuer
+- Export: /api/export/invoicex/clients.csv, /api/export/fatturapa/{contract_id}
+- Import: /api/import/clients-template.csv, /api/import/contracts-template.csv, /api/import/clients, /api/import/contracts
+
+## Deployment
+- Deployment agent: PASS (2026-02)
+- Cron: 2 scheduled tasks in /app/.emergent/crons.yml (reminder 09:00, gcal-sync 08:00 Europe/Rome)
+- Pronto per Deploy Emergent tier_0 (~$12-15/mese stimato)
 
 ## Prioritized Backlog
 - P1: Real-time map view of clients + interventions
-- P1: Manual event with time slot (start_time/end_time già nel modello, mancano UI)
-- P1: Export interventi filtrati per periodo/cliente
-- P2: Fattura elettronica XML (SDI)
-- P2: Multi-lingua
-- P2: Notifiche email 24h prima intervento (Resend)
+- P1: Manual event with time slot UI
+- P1: Fattura elettronica XML SDI: validatore inline prima del download
+- P2: Notifiche push mobile
+- P2: Export Danea Easyfatt-XML alternativo a FatturaPA
+- P2: Export TeamSystem FATSEQ per commercialisti
+- P2: Firma digitale integrata su fatture PDF
