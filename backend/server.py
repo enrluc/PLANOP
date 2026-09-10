@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -18,7 +18,15 @@ from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas as pdfcanvas
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+from pypdf import PdfReader
 import json as _json
+import re
+import ipaddress
+import secrets as _secrets
+from html import escape
+from html.parser import HTMLParser
+from urllib.parse import urlparse
+from fastapi import BackgroundTasks
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -776,6 +784,40 @@ class AnalyzeContractIn(BaseModel):
 
 @api_router.post("/ai/analyze-contract")
 async def analyze_contract(payload: AnalyzeContractIn, user=Depends(get_current_user)):
+    return await _analyze_text(payload.text, user)
+
+
+@api_router.post("/ai/analyze-contract-pdf")
+async def analyze_contract_pdf(file: UploadFile = File(...), user=Depends(get_current_user)):
+    """Upload a signed contract PDF -> extract text -> analyze with Claude."""
+    if not (file.filename or "").lower().endswith(".pdf") and file.content_type != "application/pdf":
+        raise HTTPException(400, "Il file deve essere un PDF")
+    raw = await file.read()
+    if len(raw) > 15 * 1024 * 1024:
+        raise HTTPException(413, "PDF troppo grande (max 15MB)")
+    try:
+        reader = PdfReader(io.BytesIO(raw))
+        pages_text = []
+        for p in reader.pages[:30]:  # first 30 pages to bound tokens
+            try:
+                pages_text.append(p.extract_text() or "")
+            except Exception:
+                continue
+        text = "\n".join(pages_text).strip()
+    except Exception as e:
+        raise HTTPException(422, f"Impossibile leggere il PDF: {e}")
+    if len(text) < 40:
+        raise HTTPException(422, "Il PDF sembra vuoto o scansionato (nessun testo estraibile). Prova a incollare il testo manualmente.")
+    # Cap length to keep prompt cheap
+    if len(text) > 30000:
+        text = text[:30000]
+    result = await _analyze_text(text, user)
+    result["pages"] = len(reader.pages)
+    result["chars_extracted"] = len(text)
+    return result
+
+
+async def _analyze_text(text: str, user):
     """Extract structured contract fields from raw contract text using Claude Haiku 4.5."""
     sys_msg = (
         "Sei un assistente italiano che estrae dati strutturati da contratti di consulenza. "
@@ -794,7 +836,7 @@ async def analyze_contract(payload: AnalyzeContractIn, user=Depends(get_current_
         "Se un campo non è presente nel testo, usa stringa vuota o 0. NON aggiungere testo fuori dal JSON."
     )
     chat = _make_chat(f"analyze-{user['user_id']}-{uuid.uuid4().hex[:6]}", sys_msg)
-    resp = await chat.send_message(UserMessage(text=f"Analizza il seguente contratto ed estrai i dati:\n\n{payload.text}"))
+    resp = await chat.send_message(UserMessage(text=f"Analizza il seguente contratto ed estrai i dati:\n\n{text}"))
     raw = resp if isinstance(resp, str) else str(resp)
     # Strip code fences if present
     txt = raw.strip()
@@ -911,6 +953,448 @@ async def ai_draft(payload: DraftIn, user=Depends(get_current_user)):
     chat = _make_chat(f"draft-{user['user_id']}-{uuid.uuid4().hex[:6]}", sys_msg)
     resp = await chat.send_message(UserMessage(text=prompt))
     return {"draft": resp if isinstance(resp, str) else str(resp), "model": CLAUDE_MODEL}
+
+
+# =============== EMAIL (Emergent-managed Resend) ===============
+
+EMAIL_BASE_URL = "https://integrations.emergentagent.com"
+EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY", "")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "PlanOp")
+EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
+WEBHOOK_CRON_SECRET = os.environ.get("WEBHOOK_CRON_SECRET", "")
+
+_SHORTENERS = ("bit.ly", "tinyurl.com", "t.co", "is.gd", "cutt.ly", "goo.gl", "rebrand.ly")
+_CRED_ASK = (
+    "reply with your password", "reply with the code", "send your password", "cvv",
+    "send us your password", "enter your password below", "confirm your card number",
+    "your full card number", "seed phrase", "recovery phrase", "verify your card",
+    "social security number", "confirm your bank details",
+)
+_HOSTISH = re.compile(r"\b(?:https?://)?((?:[a-z0-9-]+\.)+[a-z]{2,})", re.I)
+
+
+def _host_ok(host: str) -> bool:
+    if not host or "xn--" in host:
+        return False
+    try:
+        ipaddress.ip_address(host)
+        return False
+    except ValueError:
+        pass
+    return not any(host == s or host.endswith("." + s) for s in _SHORTENERS)
+
+
+def _same_site(shown: str, real: str) -> bool:
+    return shown == real or real.endswith("." + shown) or shown.endswith("." + real)
+
+
+class _EmailScan(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tags, self.urls, self.anchors = set(), [], []
+        self._href, self._text = None, []
+
+    def handle_starttag(self, tag, attrs):
+        self.tags.add(tag.lower())
+        self.urls += [v for k, v in attrs if k.lower() in ("href", "src") and v]
+        if tag.lower() == "a":
+            self._href = dict((k.lower(), v) for k, v in attrs).get("href")
+            self._text = []
+
+    def handle_data(self, data):
+        if self._href is not None:
+            self._text.append(data)
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "a" and self._href is not None:
+            self.anchors.append((self._href, "".join(self._text)))
+            self._href, self._text = None, []
+
+
+def _assert_safe_email(subject: str, html: str) -> None:
+    scan = _EmailScan(); scan.feed(html)
+    if scan.tags & {"form", "input", "textarea", "select"}:
+        raise ValueError("No forms or input fields in email (G2)")
+    body = f"{subject}\n{html}".lower()
+    for p in _CRED_ASK:
+        if p in body:
+            raise ValueError(f"Email asks the recipient for credentials: {p!r} (G2)")
+    for url in scan.urls:
+        low = url.strip().lower()
+        if low.startswith(("mailto:", "tel:", "cid:", "#")):
+            continue
+        if not low.startswith("https://"):
+            raise ValueError(f"Email links/assets must be absolute https: {url!r} (G3)")
+        host = urlparse(low).hostname or ""
+        if not _host_ok(host) or urlparse(low).username is not None:
+            raise ValueError(f"Shortened, numeric-host or credential-bearing URL: {url!r} (G3)")
+    for href, text in scan.anchors:
+        real = urlparse(href.strip().lower()).hostname or ""
+        if not real:
+            continue
+        for m in _HOSTISH.finditer(text):
+            if not _same_site(m.group(1).lower(), real):
+                raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
+
+
+async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
+    _assert_safe_email(subject, html)
+    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+    if EMAIL_REPLY_TO:
+        payload["contact_email"] = EMAIL_REPLY_TO
+    try:
+        async with httpx.AsyncClient(timeout=30) as hc:
+            resp = await hc.post(
+                f"{EMAIL_BASE_URL}/api/v1/email/send",
+                headers={"X-Email-Key": EMAIL_KEY},
+                json=payload,
+            )
+        resp.raise_for_status()
+        return resp.json().get("id")
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Email send failed: {e.response.status_code} {e.response.text}")
+        raise HTTPException(status_code=502, detail="Failed to send email")
+    except Exception as e:
+        logger.error(f"Email send error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send email")
+
+
+def _reminder_html(client_name: str, intervention_date: str, contract_title: str,
+                   day_index: int, total_days: int, address: str) -> str:
+    safe_client = escape(client_name)
+    safe_title = escape(contract_title)
+    safe_date = escape(intervention_date)
+    safe_addr = escape(address or "")
+    safe_from = escape(EMAIL_FROM_NAME)
+    return (
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0">'
+        f'<tr><td style="padding:24px;font-family:Arial,sans-serif;color:#0F172A">'
+        f'<h2 style="margin:0 0 12px 0;color:#1E40AF">Promemoria intervento</h2>'
+        f'<p>Gentile {safe_client},</p>'
+        f'<p>ti ricordiamo che <strong>domani {safe_date}</strong> è previsto il nostro intervento presso la vostra sede'
+        f' ({safe_addr}) nell&#39;ambito del contratto <strong>{safe_title}</strong>.</p>'
+        f'<p style="background:#F1F5F9;padding:12px;border-radius:6px;margin:16px 0">'
+        f'Giornata <strong>{day_index}</strong> di <strong>{total_days}</strong>.</p>'
+        f'<p>Per qualsiasi variazione, risponda pure a questa email.</p>'
+        f'<p style="margin-top:24px">Cordiali saluti,<br>{safe_from}</p>'
+        f'<hr style="border:none;border-top:1px solid #E2E8F0;margin:20px 0">'
+        f'<p style="font-size:11px;color:#64748B">Email inviata da {safe_from}. Non chiediamo mai password, codici o dati di pagamento via email.</p>'
+        f'</td></tr></table>'
+    )
+
+
+class ReminderPrefsIn(BaseModel):
+    enabled: bool = True
+    send_to_client_email: bool = True
+    cc_owner: bool = False
+    owner_email: Optional[str] = None
+
+
+@api_router.get("/reminders/prefs")
+async def get_prefs(user=Depends(get_current_user)):
+    doc = await db.reminder_prefs.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not doc:
+        return {"enabled": True, "send_to_client_email": True, "cc_owner": False, "owner_email": user.get("email", "")}
+    return doc
+
+
+@api_router.put("/reminders/prefs")
+async def set_prefs(payload: ReminderPrefsIn, user=Depends(get_current_user)):
+    data = payload.model_dump()
+    data["user_id"] = user["user_id"]
+    await db.reminder_prefs.update_one(
+        {"user_id": user["user_id"]}, {"$set": data}, upsert=True,
+    )
+    return {"ok": True}
+
+
+@api_router.post("/reminders/test")
+async def test_reminder(user=Depends(get_current_user)):
+    """Send a test reminder email to the owner (signed-in user)."""
+    if not EMAIL_KEY:
+        raise HTTPException(500, "Email non configurata")
+    html = _reminder_html(
+        client_name=user.get("name", "Cliente"),
+        intervention_date=(date.today() + timedelta(days=1)).isoformat(),
+        contract_title="Contratto di test PlanOp",
+        day_index=1, total_days=3, address="Via Roma 1, Milano",
+    )
+    mid = await send_email(to=user["email"], subject="Promemoria intervento (test)", html=html)
+    return {"ok": True, "email_id": mid}
+
+
+class ReminderCronIn(BaseModel):
+    event: Optional[str] = None
+    schedule_id: Optional[str] = None
+    run_id: Optional[str] = None
+    dispatch_time: Optional[str] = None
+    job_id: Optional[str] = None
+    data: Optional[dict] = None
+
+
+async def _send_daily_reminders(run_id: str):
+    """Background: find tomorrow's interventions and send emails per user prefs.
+    Idempotent via run_id + intervention_id."""
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    ivs = await db.interventions.find({"date": tomorrow}, {"_id": 0}).to_list(2000)
+    if not ivs:
+        return
+    # Bulk fetch clients, contracts, prefs
+    contract_ids = list({iv["contract_id"] for iv in ivs})
+    client_ids = list({iv["client_id"] for iv in ivs})
+    user_ids = list({iv["user_id"] for iv in ivs})
+    contracts = {c["id"]: c for c in await db.contracts.find({"id": {"$in": contract_ids}}, {"_id": 0}).to_list(2000)}
+    clients = {c["id"]: c for c in await db.clients.find({"id": {"$in": client_ids}}, {"_id": 0}).to_list(2000)}
+    prefs_map = {p["user_id"]: p for p in await db.reminder_prefs.find({"user_id": {"$in": user_ids}}, {"_id": 0}).to_list(2000)}
+
+    for iv in ivs:
+        prefs = prefs_map.get(iv["user_id"], {"enabled": True, "send_to_client_email": True,
+                                              "cc_owner": False, "owner_email": None})
+        if not prefs.get("enabled", True):
+            continue
+        # Idempotency: skip if we already logged this reminder
+        already = await db.reminder_log.find_one(
+            {"intervention_id": iv["id"], "date": tomorrow}, {"_id": 0}
+        )
+        if already:
+            continue
+        cli = clients.get(iv["client_id"])
+        c = contracts.get(iv["contract_id"])
+        if not cli or not c:
+            continue
+        recipient = cli.get("email") if prefs.get("send_to_client_email", True) else None
+        if not recipient and prefs.get("cc_owner"):
+            recipient = prefs.get("owner_email")
+        if not recipient:
+            continue
+        html = _reminder_html(
+            client_name=cli.get("name", "Cliente"),
+            intervention_date=tomorrow,
+            contract_title=c.get("title", "Attivita"),
+            day_index=iv.get("day_index", 1),
+            total_days=c.get("total_days", 0),
+            address=f"{cli.get('address','')} {cli.get('city','')}".strip(),
+        )
+        try:
+            eid = await send_email(to=recipient, subject=f"Promemoria intervento di domani ({tomorrow})", html=html)
+            await db.reminder_log.insert_one({
+                "intervention_id": iv["id"],
+                "user_id": iv["user_id"],
+                "date": tomorrow,
+                "recipient": recipient,
+                "email_id": eid,
+                "run_id": run_id,
+                "sent_at": datetime.now(timezone.utc).isoformat(),
+            })
+        except Exception as e:
+            logger.error(f"Reminder send failed for {iv['id']}: {e}")
+
+
+@api_router.post("/cron/reminders")
+async def cron_reminders(request: Request, payload: ReminderCronIn, background_tasks: BackgroundTasks):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    if not WEBHOOK_CRON_SECRET or not _secrets.compare_digest(token, WEBHOOK_CRON_SECRET):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    run_id = request.headers.get("X-Webhook-Id") or (payload.run_id or uuid.uuid4().hex)
+    # Idempotency guard
+    existing = await db.cron_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if existing:
+        return {"ok": True, "duplicate": True}
+    await db.cron_runs.insert_one({
+        "run_id": run_id,
+        "schedule_id": payload.schedule_id or "reminder-daily",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    })
+    background_tasks.add_task(_send_daily_reminders, run_id)
+    return {"ok": True, "run_id": run_id}
+
+
+@api_router.get("/reminders/log")
+async def reminder_log(user=Depends(get_current_user)):
+    docs = await db.reminder_log.find({"user_id": user["user_id"]}, {"_id": 0}).sort("sent_at", -1).to_list(200)
+    return docs
+
+
+# =============== GOOGLE CALENDAR (iCal URL sync) ===============
+
+class GCalSettingsIn(BaseModel):
+    ics_url: str = ""
+    enabled: bool = True
+
+
+@api_router.get("/gcal/settings")
+async def gcal_get(user=Depends(get_current_user)):
+    doc = await db.gcal_settings.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not doc:
+        return {"ics_url": "", "enabled": False, "last_sync": None, "last_count": 0}
+    return doc
+
+
+@api_router.put("/gcal/settings")
+async def gcal_set(payload: GCalSettingsIn, user=Depends(get_current_user)):
+    url = payload.ics_url.strip()
+    if url and not (url.startswith("https://") or url.startswith("webcal://")):
+        raise HTTPException(400, "L'URL deve iniziare con https:// o webcal://")
+    if url.startswith("webcal://"):
+        url = "https://" + url[len("webcal://"):]
+    await db.gcal_settings.update_one(
+        {"user_id": user["user_id"]},
+        {"$set": {"user_id": user["user_id"], "ics_url": url, "enabled": payload.enabled}},
+        upsert=True,
+    )
+    return {"ok": True, "ics_url": url}
+
+
+def _parse_ics(text: str) -> list:
+    """Very small ICS parser - returns list of dicts with uid, summary, date (YYYY-MM-DD),
+    end_date (exclusive), all_day (bool), notes."""
+    # Unfold folded lines (RFC 5545: continuation lines start with space or tab)
+    unfolded = []
+    for line in text.splitlines():
+        if line.startswith((" ", "\t")) and unfolded:
+            unfolded[-1] += line[1:]
+        else:
+            unfolded.append(line)
+    events = []
+    cur = None
+    for line in unfolded:
+        if line == "BEGIN:VEVENT":
+            cur = {}
+        elif line == "END:VEVENT":
+            if cur and cur.get("date"):
+                events.append(cur)
+            cur = None
+        elif cur is not None and ":" in line:
+            key_full, _, value = line.partition(":")
+            key = key_full.split(";")[0].upper()
+            params = key_full.split(";")[1:]
+            if key == "UID":
+                cur["uid"] = value.strip()
+            elif key == "SUMMARY":
+                cur["summary"] = value.replace("\\,", ",").replace("\\n", " ").strip()
+            elif key == "DESCRIPTION":
+                cur["notes"] = value.replace("\\,", ",").replace("\\n", " ").strip()[:500]
+            elif key == "DTSTART":
+                v = value.strip()
+                is_date = any(p.upper() == "VALUE=DATE" for p in params) or len(v) == 8
+                try:
+                    if is_date:
+                        cur["date"] = f"{v[0:4]}-{v[4:6]}-{v[6:8]}"
+                        cur["all_day"] = True
+                    else:
+                        # DTSTART with time - use date portion only
+                        cur["date"] = f"{v[0:4]}-{v[4:6]}-{v[6:8]}"
+                        cur["all_day"] = False
+                except Exception:
+                    pass
+            elif key == "DTEND":
+                v = value.strip()
+                try:
+                    cur["end_date"] = f"{v[0:4]}-{v[4:6]}-{v[6:8]}"
+                except Exception:
+                    pass
+    return events
+
+
+async def _sync_gcal_for_user(user_id: str) -> dict:
+    settings = await db.gcal_settings.find_one({"user_id": user_id}, {"_id": 0})
+    if not settings or not settings.get("ics_url") or not settings.get("enabled", True):
+        return {"synced": 0, "skipped": True}
+    url = settings["ics_url"]
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as hc:
+            r = await hc.get(url, headers={"User-Agent": "PlanOp/1.0"})
+        if r.status_code != 200:
+            raise HTTPException(502, f"iCal URL non raggiungibile (HTTP {r.status_code})")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(502, f"Errore lettura iCal: {e}")
+
+    events = _parse_ics(r.text)
+    today = date.today()
+    horizon = today + timedelta(days=365)
+    # Keep only future events within 1 year
+    future = []
+    for ev in events:
+        try:
+            d = datetime.fromisoformat(ev["date"]).date()
+            if today <= d <= horizon:
+                future.append(ev)
+        except Exception:
+            continue
+
+    # Delete existing gcal-synced events for this user (only future dates)
+    await db.manual_events.delete_many({
+        "user_id": user_id,
+        "source": "gcal",
+        "date": {"$gte": today.isoformat()},
+    })
+    # Insert fresh
+    docs = []
+    for ev in future:
+        docs.append({
+            "id": uuid.uuid4().hex,
+            "user_id": user_id,
+            "date": ev["date"],
+            "title": (ev.get("summary") or "Evento Google")[:200],
+            "client_id": None,
+            "notes": ev.get("notes", "")[:500],
+            "all_day": ev.get("all_day", True),
+            "start_time": None,
+            "end_time": None,
+            "source": "gcal",
+            "gcal_uid": ev.get("uid", ""),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+    if docs:
+        await db.manual_events.insert_many(docs)
+
+    await db.gcal_settings.update_one(
+        {"user_id": user_id},
+        {"$set": {
+            "last_sync": datetime.now(timezone.utc).isoformat(),
+            "last_count": len(docs),
+        }},
+    )
+    return {"synced": len(docs), "skipped": False}
+
+
+@api_router.post("/gcal/sync")
+async def gcal_sync_now(user=Depends(get_current_user)):
+    res = await _sync_gcal_for_user(user["user_id"])
+    return res
+
+
+@api_router.post("/cron/gcal-sync")
+async def cron_gcal_sync(request: Request, payload: ReminderCronIn, background_tasks: BackgroundTasks):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    if not WEBHOOK_CRON_SECRET or not _secrets.compare_digest(token, WEBHOOK_CRON_SECRET):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    run_id = request.headers.get("X-Webhook-Id") or (payload.run_id or uuid.uuid4().hex)
+    existing = await db.cron_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if existing:
+        return {"ok": True, "duplicate": True}
+    await db.cron_runs.insert_one({
+        "run_id": run_id,
+        "schedule_id": payload.schedule_id or "gcal-sync",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    async def _run_all():
+        active = await db.gcal_settings.find({"enabled": True, "ics_url": {"$ne": ""}}, {"_id": 0, "user_id": 1}).to_list(1000)
+        for s in active:
+            try:
+                await _sync_gcal_for_user(s["user_id"])
+            except Exception as e:
+                logger.error(f"gcal sync failed for {s['user_id']}: {e}")
+
+    background_tasks.add_task(_run_all)
+    return {"ok": True, "run_id": run_id}
 
 
 app.include_router(api_router)

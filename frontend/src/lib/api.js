@@ -44,6 +44,22 @@ export const generateInvoice = async (data) => {
 };
 
 export const aiAnalyzeContract = (text) => api.post("/ai/analyze-contract", { text }).then(r => r.data);
+export const aiAnalyzeContractPdf = (file) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return api.post("/ai/analyze-contract-pdf", fd, {
+    headers: { "Content-Type": "multipart/form-data" },
+  }).then(r => r.data);
+};
+
+export const getReminderPrefs = () => api.get("/reminders/prefs").then(r => r.data);
+export const setReminderPrefs = (data) => api.put("/reminders/prefs", data).then(r => r.data);
+export const testReminder = () => api.post("/reminders/test").then(r => r.data);
+export const getReminderLog = () => api.get("/reminders/log").then(r => r.data);
+
+export const getGcalSettings = () => api.get("/gcal/settings").then(r => r.data);
+export const setGcalSettings = (data) => api.put("/gcal/settings", data).then(r => r.data);
+export const gcalSyncNow = () => api.post("/gcal/sync").then(r => r.data);
 export const aiPlanningChat = (message, session_id) =>
   api.post("/ai/planning-chat", { message, session_id }).then(r => r.data);
 export const aiChatHistory = (session_id) =>

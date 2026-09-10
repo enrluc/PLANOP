@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { aiPlanningChat, aiChatHistory, aiAnalyzeContract, listClients, createClient, createContract } from "../lib/api";
+import { aiPlanningChat, aiChatHistory, aiAnalyzeContract, aiAnalyzeContractPdf, listClients, createClient, createContract } from "../lib/api";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
-import { Sparkles, Send, FileSearch, Wand2, Loader2, User } from "lucide-react";
+import { Sparkles, Send, FileSearch, Wand2, Loader2, User, Upload, FileText } from "lucide-react";
 import { toast } from "sonner";
 
 function Chat() {
@@ -97,19 +97,37 @@ function Analyze() {
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
+  const [meta, setMeta] = useState(null);
   const [clients, setClients] = useState([]);
+  const fileRef = useRef(null);
 
   useEffect(() => { listClients().then(setClients).catch(() => {}); }, []);
 
   const analyze = async () => {
     if (!text.trim()) return;
-    setLoading(true); setResult(null);
+    setLoading(true); setResult(null); setMeta(null);
     try {
       const r = await aiAnalyzeContract(text);
       setResult(r.extracted);
       toast.success("Contratto analizzato");
     } catch (_e) { toast.error("Estrazione fallita"); }
     finally { setLoading(false); }
+  };
+
+  const analyzePdf = async (file) => {
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) { toast.error("PDF troppo grande (max 15MB)"); return; }
+    setLoading(true); setResult(null); setMeta(null); setText("");
+    try {
+      const r = await aiAnalyzeContractPdf(file);
+      setResult(r.extracted);
+      setMeta({ pages: r.pages, chars: r.chars_extracted, filename: file.name });
+      toast.success(`PDF letto (${r.pages} pagine) e analizzato`);
+    } catch (e) {
+      const msg = e?.response?.data?.detail || "Estrazione PDF fallita";
+      toast.error(String(msg));
+    }
+    finally { setLoading(false); if (fileRef.current) fileRef.current.value = ""; }
   };
 
   const createFromResult = async () => {
@@ -152,14 +170,42 @@ function Analyze() {
       <Card className="p-5 border-slate-200 bg-white">
         <div className="flex items-center gap-2 mb-3">
           <FileSearch className="w-4 h-4 text-blue-700" />
-          <span className="font-bold font-display text-slate-900">Testo del contratto</span>
+          <span className="font-bold font-display text-slate-900">Contratto</span>
         </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/pdf,.pdf"
+          data-testid="analyze-pdf-input"
+          className="hidden"
+          onChange={(e) => analyzePdf(e.target.files?.[0])}
+        />
+        <Button
+          data-testid="analyze-pdf-button"
+          variant="outline"
+          onClick={() => fileRef.current?.click()}
+          disabled={loading}
+          className="w-full mb-3 border-dashed border-2 h-16 text-slate-700 hover:bg-slate-50"
+        >
+          <Upload className="w-5 h-5 mr-2 text-blue-700" />
+          <div className="text-left">
+            <div className="text-sm font-semibold">Carica PDF firmato</div>
+            <div className="text-xs text-slate-500 font-normal">Claude lo legge e estrae i dati</div>
+          </div>
+        </Button>
+        {meta && (
+          <div className="mb-3 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2 flex items-center gap-2">
+            <FileText className="w-3.5 h-3.5" />
+            <span>{meta.filename} · {meta.pages} pagine · {meta.chars} caratteri estratti</span>
+          </div>
+        )}
+        <div className="text-xs text-slate-400 text-center my-2">— oppure —</div>
         <Textarea
           data-testid="analyze-text-input"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Incolla qui il testo del contratto firmato (Word/PDF copiato). Claude estrarrà cliente, giorni, scadenze, tariffa…"
-          className="min-h-[280px] font-mono text-xs"
+          placeholder="Incolla qui il testo del contratto…"
+          className="min-h-[200px] font-mono text-xs"
         />
         <Button
           data-testid="analyze-run"
@@ -168,7 +214,7 @@ function Analyze() {
           className="mt-3 w-full bg-slate-900 hover:bg-slate-800 text-white"
         >
           {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Wand2 className="w-4 h-4 mr-2" />}
-          {loading ? "Analisi in corso…" : "Analizza con AI"}
+          {loading ? "Analisi in corso…" : "Analizza testo con AI"}
         </Button>
       </Card>
       <Card className="p-5 border-slate-200 bg-white">

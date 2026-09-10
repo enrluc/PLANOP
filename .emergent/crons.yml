@@ -1,0 +1,17 @@
+crons:
+  - name: reminder-daily
+    description: "Invia i reminder email 24h prima degli interventi ai clienti"
+    cron: "0 9 * * *"
+    timezone: "Europe/Rome"
+    endpoint: "{{BASE_URL}}/api/cron/reminders"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true
+  - name: gcal-sync-daily
+    description: "Sincronizza gli appuntamenti da Google Calendar iCal per bloccare le date"
+    cron: "0 8 * * *"
+    timezone: "Europe/Rome"
+    endpoint: "{{BASE_URL}}/api/cron/gcal-sync"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true
