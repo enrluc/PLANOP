@@ -576,7 +576,8 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
                     mkey = (c["id"], cur.isoformat()[:7])
                     per_month_count[mkey] = per_month_count.get(mkey, 0) + 1
                 done_for_contract += 1
-                cur = cur + timedelta(days=1)
+                # Spacing: within same contract avoid consecutive days (skip 1 workday between interventions)
+                cur = cur + timedelta(days=2)
                 rem_body -= 1
         # Append reserved end interventions with the correct final day_index
         for day_idx, dt, slot in reserved_end:
