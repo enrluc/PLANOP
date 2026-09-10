@@ -181,10 +181,9 @@ class Contract(BaseModel):
     numero_preventivo: Optional[str] = ""
     client_id: str
     title: str
-    total_days: int
+    total_days: float
     daily_rate: float = 0
     intervention_type: str = "consulenza"
-    intervention_slot: str = "full"  # full | morning | afternoon
     max_per_month: Optional[int] = None  # limite interventi al mese
     priority: str = "medium"  # high, medium, low
     start_date: Optional[str] = None  # ISO date
@@ -199,10 +198,9 @@ class ContractIn(BaseModel):
     numero_preventivo: Optional[str] = ""
     client_id: str
     title: str
-    total_days: int
+    total_days: float
     daily_rate: float = 0
     intervention_type: str = "consulenza"
-    intervention_slot: str = "full"
     max_per_month: Optional[int] = None
     priority: str = "medium"
     start_date: Optional[str] = None
@@ -378,11 +376,13 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
         if ev.get("all_day", True):
             booked_dates.add(ev["date"])
 
-    # Compute remaining days
+    # Compute remaining days (support decimals - 0.5 = half day = 1 intervention with slot=morning)
     remaining = []
     for c in contracts:
         done = planned_per_contract.get(c["id"], 0)
-        rem = c["total_days"] - done
+        # Number of interventions needed = ceil(total_days) since half-days count as 1 intervention slot
+        needed = math.ceil(float(c["total_days"]))
+        rem = needed - done
         if rem > 0:
             remaining.append({"contract": c, "remaining": rem, "client": clients_map.get(c["client_id"])})
 
@@ -477,6 +477,10 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
             skipped.append({"contract_id": c["id"], "reason": "deadline_expired", "remaining": rem})
             continue
         done_for_contract = planned_per_contract.get(c["id"], 0)
+        # If contract has fractional total_days (e.g. 3.5), last intervention is a half-day (morning)
+        total_days_f = float(c["total_days"])
+        has_half = (total_days_f - int(total_days_f)) > 0
+        total_needed = math.ceil(total_days_f)
         contract_full = False
         while rem > 0 and not contract_full:
             block = min(max_block, rem)
@@ -526,7 +530,7 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
                     contract_id=c["id"],
                     client_id=c["client_id"],
                     date=cur.isoformat(),
-                    slot="full",
+                    slot=("morning" if (has_half and (done_for_contract + 1) == total_needed) else "full"),
                     day_index=done_for_contract + 1,
                 )
                 new_interventions.append(iv.model_dump())
@@ -1039,7 +1043,7 @@ async def _analyze_text(text: str, user):
         "{\"client_name\": string, \"city\": string, \"address\": string, "
         "\"contact_name\": string, \"phone\": string, \"email\": string, "
         "\"title\": string (titolo/oggetto attività), "
-        "\"total_days\": integer (numero giornate previste), "
+        "\"total_days\": number (numero giornate previste, ammette decimali es. 3.5), "
         "\"daily_rate\": number (tariffa giornaliera EUR, 0 se non specificata), "
         "\"intervention_type\": string (es. consulenza/formazione/audit), "
         "\"priority\": string (\"high\"|\"medium\"|\"low\", default medium), "

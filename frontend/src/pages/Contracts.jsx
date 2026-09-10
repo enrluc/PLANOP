@@ -126,7 +126,7 @@ export default function Contracts() {
     if (!form.client_id || !form.title || !form.total_days) { toast.error("Cliente, titolo e giorni obbligatori"); return; }
     const payload = {
       ...form,
-      total_days: Number(form.total_days),
+      total_days: Number(form.total_days) || 0.5,
       daily_rate: Number(form.daily_rate) || 0,
       start_date: form.start_date || null,
       deadline: form.deadline || null,
@@ -250,11 +250,13 @@ export default function Contracts() {
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <Label>Giorni totali *</Label>
-                  <Input data-testid="contract-days-input" type="number" min="1" value={form.total_days} onChange={(e) => setForm({ ...form, total_days: e.target.value })} />
+                  <Input data-testid="contract-days-input" type="number" min="0.5" step="0.5" value={form.total_days} onChange={(e) => setForm({ ...form, total_days: e.target.value })} />
+                  <div className="text-xs text-slate-500 mt-1">Anche decimali (es. 3.5 = 3 giornate + una mattinata). Letto automaticamente dal PDF preventivo.</div>
                 </div>
                 <div>
                   <Label>Tariffa giornaliera €</Label>
                   <Input data-testid="contract-rate-input" type="number" min="0" step="10" value={form.daily_rate} onChange={(e) => setForm({ ...form, daily_rate: e.target.value })} />
+                  <div className="text-xs text-slate-500 mt-1">Da preventivo o manuale</div>
                 </div>
                 <div>
                   <Label>Priorità</Label>
