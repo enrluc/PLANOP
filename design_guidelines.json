@@ -1,0 +1,123 @@
+{
+  "project_name": "PlanOp - Planning Interventi & Gestione Contratti",
+  "app_type": "dashboard",
+  "language": "it",
+  "persona": "E1 - The Anti-AI Designer",
+  "emotional_archetype": "Swiss & High-Contrast Precision Utility (Archetype 4)",
+  "responsive": {
+    "breakpoint": "mobile-first",
+    "layout": "Mobile viewports default to single-column card feeds with collapsible sidebar / drawer navigation and bottom sticky action bar. Desktop scales up to multi-column high-density bento grids (grid-cols-1 md:grid-cols-3 lg:grid-cols-4). Heavy visual widgets stack vertically on screens under 768px with horizontal scrolling tables and touch-friendly swipe tabs.",
+    "typography": "Mobile-first fluid scale using rem units. H1 starts at text-3xl sm:text-4xl lg:text-5xl. Body text is 1rem (16px) with py-3 inputs and 44px minimum tap targets to avoid mobile browser automatic zoom.",
+    "overflow_guard": "All grid and flex containers must use min-w-0 and overflow-x-hidden on root containers to prevent unintended horizontal scrollbar bugs. Data tables wrap inside overflow-x-auto containers with sticky action columns.",
+    "tap_targets": "All interactive elements, buttons, tabs, calendar dates, and action icons must have a minimum interactive tap target area of 44px x 44px (p-3 / h-11)."
+  },
+  "typography": {
+    "headings_font": "Cabinet Grotesk / Outfit",
+    "body_font": "IBM Plex Sans / DM Sans",
+    "mono_font": "JetBrains Mono",
+    "forbidden_fonts": ["Space Grotesk", "Inter", "Roboto", "Open Sans", "Lato"],
+    "hierarchy": {
+      "h1": "text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl font-bold tracking-tight text-slate-900 dark:text-slate-100",
+      "h3": "text-xl sm:text-2xl font-semibold text-slate-800 dark:text-slate-200",
+      "h4": "text-lg sm:text-xl font-medium text-slate-800 dark:text-slate-200",
+      "body": "text-base leading-relaxed text-slate-600 dark:text-slate-300",
+      "small": "text-xs sm:text-sm font-medium tracking-wide uppercase text-slate-500 dark:text-slate-400"
+    }
+  },
+  "colors": {
+    "theme_mode": "light_primary_with_dark_toggle",
+    "forbidden_colors": ["#1B93A4", "#7351B7"],
+    "palette": {
+      "background_light": "#FAFAFC",
+      "surface_light": "#FFFFFF",
+      "border_light": "#E2E8F0",
+      "background_dark": "#0B0F17",
+      "surface_dark": "#151C28",
+      "border_dark": "#2A3447",
+      "primary": "#1E40AF",
+      "primary_hover": "#1D4ED8",
+      "primary_accent": "#3B82F6",
+      "secondary_slate": "#0F172A",
+      "success_emerald": "#059669",
+      "warning_amber": "#D97706",
+      "priority_high_crimson": "#DC2626",
+      "priority_medium_amber": "#F59E0B",
+      "priority_low_blue": "#2563EB",
+      "google_calendar_red": "#EA4335"
+    },
+    "surface_rules": "Never use pure #000000 or full transparent backgrounds on dropdowns/modals. Always add subtle tinting to neutrals. Headers and overlays must use backdrop-blur-xl with semi-opaque surfaces (e.g. bg-white/90 dark:bg-slate-900/90 border-b border-slate-200 dark:border-slate-800)."
+  },
+  "layout_and_grids": {
+    "grid_mode": "MODE B: High Density Dashboard Grid",
+    "base_grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6",
+    "container_padding": "p-4 sm:p-6 lg:p-8",
+    "card_style": "Flat background with sharp subtle rounded corners (rounded-lg or rounded-xl), 1px stroke border (border-slate-200 dark:border-slate-800), micro-shadow on hover (hover:shadow-md hover:border-slate-300 dark:hover:border-slate-700 transition-all duration-200)."
+  },
+  "key_components": [
+    {
+      "name": "DashboardOverview",
+      "description": "Metric cards (Active Contracts, Interventions Planned, Distance Saved via Route Optimization, Sync Status with Google Calendar) + Upcoming Interventions Timeline.",
+      "data_test_id": "dashboard-overview-container"
+    },
+    {
+      "name": "ContractManager",
+      "description": "CRUD table and detailed modal/drawer for client contracts including total days, scheduled vs remaining days, daily rate, client contact info, address, notes, and priority badges.",
+      "data_test_id": "contract-manager-section"
+    },
+    {
+      "name": "PlanningGenerator",
+      "description": "Optimized Planning Engine combining OpenStreetMap geocoding distance grouping with strict deadline constraints. Generates proposed intervention slots with route efficiency scores.",
+      "data_test_id": "planning-generator-section"
+    },
+    {
+      "name": "CalendarView",
+      "description": "Monthly and Weekly interactive intervention views with Google Calendar sync triggers, drag/reassign slots, client location badges, and conflict flags.",
+      "data_test_id": "calendar-view-section"
+    },
+    {
+      "name": "ClientRegistryAndMap",
+      "description": "Anagrafica Clienti with interactive map view of client offices/sites, contact person details, phone numbers, total interventions completed, and distance matrix.",
+      "data_test_id": "client-registry-section"
+    },
+    {
+      "name": "InvoiceGenerator",
+      "description": "PDF Invoice creator upon contract completion. Calculates total daily rate * days worked, tax breakdown (Ritenuta d'acconto / Marca da bollo / IVA / Regime Forfettario options for IT consultants), with downloadable PDF preview.",
+      "data_test_id": "invoice-generator-section"
+    },
+    {
+      "name": "GoogleAuthBar",
+      "description": "Single-user Emergent Google Auth status, sync settings, last Google Calendar sync timestamp indicator, and manual sync action button.",
+      "data_test_id": "google-auth-status-bar"
+    }
+  ],
+  "icons": {
+    "primary_library": "lucide-react",
+    "installation_command": "yarn add lucide-react @radix-ui/react-icons",
+    "usage_rules": "Never use AI emojis (🤖, 🧠, 💡) for navigation or badges. Use explicit Lucide icons: Calendar, MapPin, FileText, UserCheck, Route, ShieldCheck, RefreshCw, Plus, Download, Filter, Search, CheckCircle2, AlertTriangle, Clock, Euro."
+  },
+  "image_urls": {
+    "engineer_workspace": "https://images.unsplash.com/photo-1581092583537-20d51b4b4f1b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBlbmdpbmVlciUyMHdvcmtpbmclMjBsYXB0b3AlMjBjb25zdWx0aW5nfGVufDB8fHx8MTc4OTAxNzQwM3ww&ixlib=rb-4.1.0&q=85",
+    "client_site_office": "https://images.unsplash.com/photo-1702549245122-2700421f8b77?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Nzd8MHwxfHNlYXJjaHwxfHxtb2Rlcm4lMjBvZmZpY2UlMjBidWlsZGluZyUyMGZhY2FkZSUyMGluZHVzdHJpYWwlMjBldXJvcGV8ZW58MHx8fHwxNzg5MDE3NDEwfDA&ixlib=rb-4.1.0&q=85"
+  },
+  "instructions_to_main_agent": [
+    "Develop JavaScript (.js / .jsx) files in React with Tailwind CSS and Shadcn primitives.",
+    "Target language is ITALIAN throughout all UI elements, labels, buttons, forms, tooltips, and toasts.",
+    "Ensure mobile-first responsive layout across all screens (grid-cols-1 on mobile, grid-cols-2/3/4 on desktop).",
+    "All interactive elements must have data-testid attributes formatted in kebab-case (e.g. data-testid='add-contract-button').",
+    "DO NOT use forbidden fonts (Space Grotesk, Inter, Roboto) or forbidden dashboard colors (#1B93A4, #7351B7).",
+    "Ensure contrast ratios strictly meet WCAG AA / APCA standards. All hover states must explicitly set hover:text-white or hover:text-slate-900.",
+    "Use sonner for toast feedback on contract creation, planning generation, Google Calendar sync, and invoice PDF download.",
+    "Implement seamless Google Calendar sync state feedback (simulated / Emergent Google Auth flow integration) with sync history logs.",
+    "Provide a realistic OpenStreetMap geocoding simulation with distance grouping (e.g., grouping Milan sites together, Rome sites together) for travel optimization.",
+    "Include an Italian invoice generation module (Fattura finale PDF export) tailored for Italian technical consultants/freelancers."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Avoid generic AI template looks with centered text or repetitive cards. Create crisp, high-density professional SaaS controls.",
+    "Do not apply transition: all globally. Apply targeted transitions on background, border-color, and opacity.",
+    "Never center align the primary app container (.App { text-align: center } is strictly forbidden).",
+    "All modals, popovers, and select dropdowns must have opaque backgrounds with backdrop blur (never fully transparent).",
+    "Ensure responsive padding (p-4 mobile to p-8 desktop) so text never touches container borders.",
+    "Keep interactive tap targets at minimum 44px height for touch accessibility."
+  ]
+}

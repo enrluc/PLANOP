@@ -1,0 +1,59 @@
+{
+  "summary": "Backend smoke test complete. Auth, clients, contracts, manual events, ICS export, invoice PDF, dashboard stats all work. CRITICAL bug: POST /api/planning/generate and POST /api/planning/reschedule return 500 because response payload includes freshly-inserted Mongo docs that carry '_id' (ObjectId) after insert_many, which FastAPI cannot serialize. DB inserts still succeed and status transitions work — but any client using these endpoints will see errors.",
+  "tested_scope": ["backend", "auth", "integration"],
+  "passed": [
+    "POST /api/auth/session with invalid session_id -> 401",
+    "GET /api/auth/me without token -> 401; with seeded Bearer token -> 200 (correct user)",
+    "POST/GET/PUT /api/clients (with address 'Piazza Duomo 1, Milano') -> 200. Nominatim returned 403 (geocoding provider rate-limited from server IP), but endpoints still respond 200 with lat/lng null as allowed.",
+    "POST /api/contracts (total_days=5, priority='high', daily_rate=500) -> 200; PUT full-body -> 200; DELETE not exercised but /complete -> 200; status transitions active->planned->invoiced verified via list",
+    "Planning algorithm works internally: 5 weekday interventions created (skips Sat/Sun), status flips to 'planned' in DB",
+    "Manual events blocking: manual event on 2026-09-15 correctly excluded during regenerate; planner shifted to next weekday 2026-09-18",
+    "POST /api/manual-events, GET list, DELETE all -> 200",
+    "GET /api/calendar/subscribe-url -> URL with user_id & token",
+    "GET /api/calendar/export.ics?user_id&token -> 200, content-type text/calendar, 5 VEVENTs including intervention data (SUMMARY, LOCATION, DESCRIPTION)",
+    "POST /api/invoices/generate regime_forfettario=true -> 200 application/pdf (%PDF- header, 2335 bytes); with VAT 22 & withholding 20 -> 200 application/pdf; contract status becomes 'invoiced'",
+    "GET /api/dashboard/stats returns active_contracts, total_contracts, clients_count, interventions_planned, total_workdays, projected_revenue, upcoming[]"
+  ],
+  "failed": [
+    {
+      "area": "POST /api/planning/generate",
+      "issue": "Returns HTTP 500 (Internal Server Error) even though interventions are inserted correctly and contract status is updated. Root cause: after `db.interventions.insert_many(new_interventions)` (server.py L445), Motor mutates the list in-place appending Mongo `_id` (ObjectId) to each dict; those dicts are then returned in the response body (L449 `return {..., 'interventions': new_interventions}`) and FastAPI's jsonable_encoder throws: `TypeError: 'ObjectId' object is not iterable`.",
+      "evidence": "backend.err.log traceback: fastapi/encoders.py:322 -> `TypeError: 'ObjectId' object is not iterable`. Reproduced twice. HTTP response body: 'Internal Server Error'.",
+      "priority": "HIGH"
+    },
+    {
+      "area": "POST /api/planning/reschedule",
+      "issue": "Returns HTTP 500 for the same reason — it delegates to generate_planning() and inherits the ObjectId serialization bug (server.py L519).",
+      "evidence": "curl -X POST /api/planning/reschedule -> HTTP:500 'Internal Server Error'; interventions actually get recreated in DB correctly (verified with GET /api/interventions).",
+      "priority": "HIGH"
+    },
+    {
+      "area": "PUT /api/contracts/{id}",
+      "issue": "Requires the full ContractIn payload (client_id, title, total_days...); partial-body updates return 422. Not necessarily a bug, but the review request implied partial update. Consumer must send the entire ContractIn.",
+      "evidence": "PUT with {\"notes\":\"upd\"} -> 422 missing client_id/title/total_days. Full-body PUT -> 200.",
+      "priority": "LOW"
+    },
+    {
+      "area": "GET /api/calendar/subscribe-url",
+      "issue": "Returned URL uses `http://` and an internal/alternate host (job-scheduler-pro-12.cluster-7.preview.emergentcf.cloud) which 301-redirects to HTML when fetched. Directly calling /api/calendar/export.ics on the real REACT_APP_BACKEND_URL works fine over HTTPS. The subscribe-url should return the public HTTPS URL that Google Calendar can subscribe to.",
+      "evidence": "curl subscribe-url -> {\"url\":\"http://job-scheduler-pro-12.cluster-7.preview.emergentcf.cloud/api/calendar/export.ics?...\"}; GET that URL -> 301 text/html. Direct HTTPS on REACT_APP_BACKEND_URL -> 200 text/calendar with 5 VEVENTs.",
+      "priority": "MEDIUM"
+    },
+    {
+      "area": "Geocoding (Nominatim)",
+      "issue": "Nominatim returns 403 Forbidden from the backend host — likely missing User-Agent or blocked IP. lat/lng always null. Endpoint still returns 200 so it does not block clients, but the travel-optimization feature will fall back to arbitrary ordering.",
+      "evidence": "backend.err.log: `GET https://nominatim.openstreetmap.org/search?q=Piazza+Duomo+1%2C+Milano&format=json&limit=1 \"HTTP/1.1 403 Forbidden\"`",
+      "priority": "MEDIUM"
+    }
+  ],
+  "action_items": [
+    "Fix planning/generate & planning/reschedule 500: either exclude `_id` from `new_interventions` before returning (e.g. build response dicts with the Pydantic Intervention model, or `for iv in new_interventions: iv.pop('_id', None)` after insert_many), or return a projection-based fetch. This unblocks all frontend planning flows.",
+    "Fix /api/calendar/subscribe-url to build the URL from the request's public HTTPS origin (REACT_APP_BACKEND_URL) or force https:// scheme, so Google Calendar can subscribe.",
+    "Add a valid User-Agent header (Nominatim TOS requires it, e.g. 'PlanOp/1.0 (contact-email)') in the geocode() httpx call to fix the 403.",
+    "Consider making ContractIn fields Optional for PUT or provide a separate ContractUpdate schema."
+  ],
+  "success_rate": {"backend": "78%", "frontend": "not tested"},
+  "retest_needed": true,
+  "full_testing_deferred": true,
+  "test_credentials": "Seeded via mongosh: user_id=test-user-1789018044664, session_token=test_session_1789018044664, email=enrluc@gmail.com. /app/memory/test_credentials.md is empty (only header comments)."
+}
