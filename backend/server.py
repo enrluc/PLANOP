@@ -142,9 +142,15 @@ class Client(BaseModel):
     name: str
     address: str
     city: Optional[str] = ""
+    cap: Optional[str] = ""
+    provincia: Optional[str] = ""
     contact_name: Optional[str] = ""
     phone: Optional[str] = ""
     email: Optional[str] = ""
+    piva: Optional[str] = ""
+    codice_fiscale: Optional[str] = ""
+    codice_destinatario: Optional[str] = ""  # 7-char SdI code, "0000000" default
+    pec: Optional[str] = ""
     lat: Optional[float] = None
     lng: Optional[float] = None
     notes: Optional[str] = ""
@@ -155,9 +161,15 @@ class ClientIn(BaseModel):
     name: str
     address: str
     city: Optional[str] = ""
+    cap: Optional[str] = ""
+    provincia: Optional[str] = ""
     contact_name: Optional[str] = ""
     phone: Optional[str] = ""
     email: Optional[str] = ""
+    piva: Optional[str] = ""
+    codice_fiscale: Optional[str] = ""
+    codice_destinatario: Optional[str] = ""
+    pec: Optional[str] = ""
     notes: Optional[str] = ""
 
 
@@ -1215,6 +1227,233 @@ async def cron_reminders(request: Request, payload: ReminderCronIn, background_t
 async def reminder_log(user=Depends(get_current_user)):
     docs = await db.reminder_log.find({"user_id": user["user_id"]}, {"_id": 0}).sort("sent_at", -1).to_list(200)
     return docs
+
+
+# =============== ISSUER SETTINGS (dati emittente per FatturaPA) ===============
+
+class IssuerSettingsIn(BaseModel):
+    denominazione: str = ""  # Ragione sociale o Nome Cognome
+    nome: str = ""
+    cognome: str = ""
+    piva: str = ""
+    codice_fiscale: str = ""
+    regime_fiscale: str = "RF01"  # RF01 ordinario, RF19 forfettario
+    codice_ateco: str = ""
+    address: str = ""
+    cap: str = ""
+    city: str = ""
+    provincia: str = ""
+    nazione: str = "IT"
+    telefono: str = ""
+    email: str = ""
+    id_paese_trasmittente: str = "IT"
+    id_codice_trasmittente: str = ""  # solitamente P.IVA del trasmittente
+
+
+@api_router.get("/settings/issuer")
+async def get_issuer(user=Depends(get_current_user)):
+    doc = await db.issuer_settings.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not doc:
+        return IssuerSettingsIn().model_dump()
+    return doc
+
+
+@api_router.put("/settings/issuer")
+async def set_issuer(payload: IssuerSettingsIn, user=Depends(get_current_user)):
+    data = payload.model_dump()
+    if not data.get("id_codice_trasmittente"):
+        data["id_codice_trasmittente"] = data.get("piva") or data.get("codice_fiscale")
+    data["user_id"] = user["user_id"]
+    await db.issuer_settings.update_one(
+        {"user_id": user["user_id"]}, {"$set": data}, upsert=True,
+    )
+    return {"ok": True}
+
+
+# =============== INVOICEX EXPORT ===============
+
+def _csv_escape(v) -> str:
+    s = "" if v is None else str(v)
+    if any(ch in s for ch in [",", '"', "\n", "\r", ";"]):
+        s = '"' + s.replace('"', '""') + '"'
+    return s
+
+
+@api_router.get("/export/invoicex/clients.csv")
+async def export_invoicex_clients(user=Depends(get_current_user)):
+    """Export anagrafica clienti in CSV importabile in Invoicex (import/export -> import CSV)."""
+    docs = await db.clients.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(5000)
+    headers = [
+        "ragione_sociale", "indirizzo", "cap", "citta", "provincia", "nazione",
+        "partita_iva", "codice_fiscale", "codice_destinatario", "pec",
+        "telefono", "email", "referente", "note",
+    ]
+    lines = [";".join(headers)]
+    for c in docs:
+        row = [
+            c.get("name", ""), c.get("address", ""), c.get("cap", ""), c.get("city", ""),
+            c.get("provincia", ""), "IT",
+            c.get("piva", ""), c.get("codice_fiscale", ""),
+            c.get("codice_destinatario", ""), c.get("pec", ""),
+            c.get("phone", ""), c.get("email", ""), c.get("contact_name", ""),
+            (c.get("notes") or "").replace("\n", " "),
+        ]
+        lines.append(";".join(_csv_escape(x) for x in row))
+    body = "\ufeff" + "\r\n".join(lines)  # BOM for Excel/Invoicex UTF-8
+    return Response(
+        content=body,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=clienti-invoicex.csv"},
+    )
+
+
+def _xml_escape(v) -> str:
+    s = "" if v is None else str(v)
+    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;").replace("'", "&apos;"))
+
+
+@api_router.get("/export/fatturapa/{contract_id}")
+async def export_fatturapa(contract_id: str, invoice_number: str = "", user=Depends(get_current_user)):
+    """Generate a FatturaPA v1.2.2 XML (formato SdI privato FPR12) importabile in Invoicex."""
+    contract = await db.contracts.find_one({"id": contract_id, "user_id": user["user_id"]}, {"_id": 0})
+    if not contract:
+        raise HTTPException(404, "Contratto non trovato")
+    client = await db.clients.find_one({"id": contract["client_id"]}, {"_id": 0})
+    if not client:
+        raise HTTPException(400, "Cliente non trovato")
+    issuer = await db.issuer_settings.find_one({"user_id": user["user_id"]}, {"_id": 0}) or {}
+    if not issuer.get("piva") and not issuer.get("codice_fiscale"):
+        raise HTTPException(400, "Configura prima i dati emittente (P.IVA/CF) da Impostazioni")
+
+    ivs = await db.interventions.find({"contract_id": contract_id}, {"_id": 0}).to_list(1000)
+    worked_days = len(ivs) or contract["total_days"]
+    daily = float(contract.get("daily_rate", 0) or 0)
+    imponibile = round(daily * worked_days, 2)
+    regime = issuer.get("regime_fiscale", "RF01")
+    aliquota = 0.0 if regime == "RF19" else 22.0
+    natura = None
+    if regime == "RF19":
+        natura = "N2.2"  # Op. non soggette
+    imposta = round(imponibile * aliquota / 100, 2)
+    totale = round(imponibile + imposta, 2)
+    inv_num = invoice_number or f"{datetime.now().year}-{contract_id[:6]}"
+    inv_date = date.today().isoformat()
+    cod_dest = (client.get("codice_destinatario") or "").strip().upper() or "0000000"
+    if len(cod_dest) != 7:
+        cod_dest = "0000000"
+
+    trasm_piva = _xml_escape(issuer.get("id_codice_trasmittente") or issuer.get("piva") or issuer.get("codice_fiscale"))
+    ced_piva = _xml_escape(issuer.get("piva", ""))
+    ced_cf = _xml_escape(issuer.get("codice_fiscale", ""))
+    ced_den = _xml_escape(issuer.get("denominazione") or f"{issuer.get('nome','')} {issuer.get('cognome','')}".strip())
+    ces_den = _xml_escape(client.get("name", ""))
+    ces_piva = _xml_escape(client.get("piva", ""))
+    ces_cf = _xml_escape(client.get("codice_fiscale", ""))
+
+    # Determine cessionario identification
+    if client.get("piva"):
+        ces_id_block = (f"<IdFiscaleIVA><IdPaese>IT</IdPaese>"
+                        f"<IdCodice>{ces_piva}</IdCodice></IdFiscaleIVA>")
+    else:
+        ces_id_block = ""
+    if client.get("codice_fiscale"):
+        ces_cf_block = f"<CodiceFiscale>{ces_cf}</CodiceFiscale>"
+    else:
+        ces_cf_block = ""
+
+    natura_line = f"<Natura>{natura}</Natura>" if natura else ""
+    pec_line = f"<PECDestinatario>{_xml_escape(client.get('pec',''))}</PECDestinatario>" if (cod_dest == "0000000" and client.get("pec")) else ""
+
+    xml = f'''<?xml version="1.0" encoding="UTF-8"?>
+<p:FatturaElettronica xmlns:p="http://ivaservizi.agenziaentrate.gov.it/docs/xsd/fatture/v1.2" versione="FPR12">
+  <FatturaElettronicaHeader>
+    <DatiTrasmissione>
+      <IdTrasmittente>
+        <IdPaese>IT</IdPaese>
+        <IdCodice>{trasm_piva}</IdCodice>
+      </IdTrasmittente>
+      <ProgressivoInvio>{_xml_escape(inv_num)}</ProgressivoInvio>
+      <FormatoTrasmissione>FPR12</FormatoTrasmissione>
+      <CodiceDestinatario>{cod_dest}</CodiceDestinatario>
+      {pec_line}
+    </DatiTrasmissione>
+    <CedentePrestatore>
+      <DatiAnagrafici>
+        <IdFiscaleIVA>
+          <IdPaese>IT</IdPaese>
+          <IdCodice>{ced_piva or ced_cf}</IdCodice>
+        </IdFiscaleIVA>
+        {f'<CodiceFiscale>{ced_cf}</CodiceFiscale>' if ced_cf else ''}
+        <Anagrafica><Denominazione>{ced_den}</Denominazione></Anagrafica>
+        <RegimeFiscale>{_xml_escape(regime)}</RegimeFiscale>
+      </DatiAnagrafici>
+      <Sede>
+        <Indirizzo>{_xml_escape(issuer.get('address','N/D'))}</Indirizzo>
+        <CAP>{_xml_escape((issuer.get('cap') or '00000').zfill(5)[:5])}</CAP>
+        <Comune>{_xml_escape(issuer.get('city','N/D'))}</Comune>
+        {f"<Provincia>{_xml_escape(issuer.get('provincia',''))}</Provincia>" if issuer.get('provincia') else ''}
+        <Nazione>{_xml_escape(issuer.get('nazione','IT'))}</Nazione>
+      </Sede>
+    </CedentePrestatore>
+    <CessionarioCommittente>
+      <DatiAnagrafici>
+        {ces_id_block}
+        {ces_cf_block}
+        <Anagrafica><Denominazione>{ces_den}</Denominazione></Anagrafica>
+      </DatiAnagrafici>
+      <Sede>
+        <Indirizzo>{_xml_escape(client.get('address','N/D'))}</Indirizzo>
+        <CAP>{_xml_escape((client.get('cap') or '00000').zfill(5)[:5])}</CAP>
+        <Comune>{_xml_escape(client.get('city','N/D'))}</Comune>
+        {f"<Provincia>{_xml_escape(client.get('provincia',''))}</Provincia>" if client.get('provincia') else ''}
+        <Nazione>IT</Nazione>
+      </Sede>
+    </CessionarioCommittente>
+  </FatturaElettronicaHeader>
+  <FatturaElettronicaBody>
+    <DatiGenerali>
+      <DatiGeneraliDocumento>
+        <TipoDocumento>TD01</TipoDocumento>
+        <Divisa>EUR</Divisa>
+        <Data>{inv_date}</Data>
+        <Numero>{_xml_escape(inv_num)}</Numero>
+        <ImportoTotaleDocumento>{totale:.2f}</ImportoTotaleDocumento>
+      </DatiGeneraliDocumento>
+    </DatiGenerali>
+    <DatiBeniServizi>
+      <DettaglioLinee>
+        <NumeroLinea>1</NumeroLinea>
+        <Descrizione>{_xml_escape(contract.get('title','Prestazione professionale'))}</Descrizione>
+        <Quantita>{worked_days:.2f}</Quantita>
+        <UnitaMisura>gg</UnitaMisura>
+        <PrezzoUnitario>{daily:.2f}</PrezzoUnitario>
+        <PrezzoTotale>{imponibile:.2f}</PrezzoTotale>
+        <AliquotaIVA>{aliquota:.2f}</AliquotaIVA>
+        {natura_line}
+      </DettaglioLinee>
+      <DatiRiepilogo>
+        <AliquotaIVA>{aliquota:.2f}</AliquotaIVA>
+        {natura_line}
+        <ImponibileImporto>{imponibile:.2f}</ImponibileImporto>
+        <Imposta>{imposta:.2f}</Imposta>
+        {f'<RiferimentoNormativo>Op. non soggetta ex art. 1 c. 54-89 L. 190/2014 - Regime forfettario</RiferimentoNormativo>' if regime == 'RF19' else ''}
+      </DatiRiepilogo>
+    </DatiBeniServizi>
+  </FatturaElettronicaBody>
+</p:FatturaElettronica>
+'''
+    # Filename convention SdI: IT{piva}_00001.xml - keep simple sequential
+    tx_id = (issuer.get("id_codice_trasmittente") or issuer.get("piva") or "IT99999999999").replace(" ", "")
+    if not tx_id.startswith("IT"):
+        tx_id = "IT" + tx_id
+    safe_num = re.sub(r"[^A-Za-z0-9]", "", inv_num)[:5].upper() or "00001"
+    filename = f"{tx_id}_{safe_num}.xml"
+    return Response(
+        content=xml,
+        media_type="application/xml",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
 
 # =============== GOOGLE CALENDAR (iCal URL sync) ===============

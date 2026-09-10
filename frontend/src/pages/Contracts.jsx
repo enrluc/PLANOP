@@ -14,8 +14,9 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from "../components/ui/dialog";
-import { Plus, FileText, Trash2, Edit3, CheckCircle2, RotateCcw, Upload, Loader2 } from "lucide-react";
+import { Plus, FileText, Trash2, Edit3, CheckCircle2, RotateCcw, Upload, Loader2, FileCode } from "lucide-react";
 import { toast } from "sonner";
+import { exportFatturaPaUrl } from "../lib/api";
 
 const empty = {
   client_id: "", title: "", total_days: 1, daily_rate: 0, intervention_type: "consulenza",
@@ -304,6 +305,18 @@ export default function Contracts() {
                   <RotateCcw className="w-3.5 h-3.5 mr-1" /> Reset piano
                 </Button>
               )}
+              <Button
+                data-testid={`fatturapa-${c.id}`}
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  const num = prompt("Numero fattura (per FatturaPA)", `${new Date().getFullYear()}-001`);
+                  if (num !== null) window.open(exportFatturaPaUrl(c.id, num), "_blank");
+                }}
+                className="text-xs"
+              >
+                <FileCode className="w-3.5 h-3.5 mr-1" /> FatturaPA XML
+              </Button>
             </div>
           </Card>
         ))}

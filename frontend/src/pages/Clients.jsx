@@ -8,10 +8,11 @@ import { Textarea } from "../components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from "../components/ui/dialog";
-import { Plus, MapPin, Phone, Mail, Trash2, Edit3, Upload, Loader2 } from "lucide-react";
+import { Plus, MapPin, Phone, Mail, Trash2, Edit3, Upload, Loader2, Download } from "lucide-react";
 import { toast } from "sonner";
+import { exportClientsCsvUrl } from "../lib/api";
 
-const empty = { name: "", address: "", city: "", contact_name: "", phone: "", email: "", notes: "" };
+const empty = { name: "", address: "", city: "", cap: "", provincia: "", contact_name: "", phone: "", email: "", piva: "", codice_fiscale: "", codice_destinatario: "", pec: "", notes: "" };
 
 export default function Clients() {
   const [items, setItems] = useState([]);
@@ -36,9 +37,12 @@ export default function Clients() {
         name: d.client_name || "",
         address: d.address || "",
         city: d.city || "",
+        cap: "", provincia: "",
         contact_name: d.contact_name || "",
         phone: d.phone || "",
         email: d.email || "",
+        piva: "", codice_fiscale: "",
+        codice_destinatario: "", pec: "",
         notes: d.notes || "",
       });
       setOpen(true);
@@ -68,8 +72,13 @@ export default function Clients() {
 
   const edit = (c) => {
     setEditId(c.id);
-    setForm({ name: c.name, address: c.address, city: c.city || "", contact_name: c.contact_name || "",
-      phone: c.phone || "", email: c.email || "", notes: c.notes || "" });
+    setForm({
+      name: c.name, address: c.address, city: c.city || "", cap: c.cap || "", provincia: c.provincia || "",
+      contact_name: c.contact_name || "", phone: c.phone || "", email: c.email || "",
+      piva: c.piva || "", codice_fiscale: c.codice_fiscale || "",
+      codice_destinatario: c.codice_destinatario || "", pec: c.pec || "",
+      notes: c.notes || "",
+    });
     setOpen(true);
   };
 
@@ -104,6 +113,14 @@ export default function Clients() {
           >
             {importing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
             Importa da PDF
+          </Button>
+          <Button
+            data-testid="export-invoicex-csv-button"
+            variant="outline"
+            onClick={() => window.open(exportClientsCsvUrl(), "_blank")}
+          >
+            <Download className="w-4 h-4 mr-2" />
+            Export Invoicex CSV
           </Button>
         <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setEditId(null); setForm(empty); } }}>
           <DialogTrigger asChild>
@@ -147,6 +164,37 @@ export default function Clients() {
               <div>
                 <Label>Note</Label>
                 <Textarea data-testid="client-notes-input" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+              </div>
+              <div className="pt-3 border-t border-slate-100">
+                <div className="text-xs font-medium tracking-wider uppercase text-slate-500 mb-2">Dati fiscali (per FatturaPA / Invoicex)</div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label>P.IVA</Label>
+                    <Input data-testid="client-piva-input" value={form.piva} onChange={(e) => setForm({ ...form, piva: e.target.value })} />
+                  </div>
+                  <div>
+                    <Label>Codice Fiscale</Label>
+                    <Input data-testid="client-cf-input" value={form.codice_fiscale} onChange={(e) => setForm({ ...form, codice_fiscale: e.target.value })} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3 mt-3">
+                  <div>
+                    <Label>CAP</Label>
+                    <Input data-testid="client-cap-input" value={form.cap} onChange={(e) => setForm({ ...form, cap: e.target.value })} />
+                  </div>
+                  <div>
+                    <Label>Provincia</Label>
+                    <Input data-testid="client-prov-input" maxLength={2} value={form.provincia} onChange={(e) => setForm({ ...form, provincia: e.target.value.toUpperCase() })} placeholder="MI" />
+                  </div>
+                  <div>
+                    <Label>Cod. Destinatario</Label>
+                    <Input data-testid="client-coddest-input" maxLength={7} value={form.codice_destinatario} onChange={(e) => setForm({ ...form, codice_destinatario: e.target.value.toUpperCase() })} placeholder="0000000" />
+                  </div>
+                </div>
+                <div className="mt-3">
+                  <Label>PEC</Label>
+                  <Input data-testid="client-pec-input" value={form.pec} onChange={(e) => setForm({ ...form, pec: e.target.value })} />
+                </div>
               </div>
             </div>
             <DialogFooter>

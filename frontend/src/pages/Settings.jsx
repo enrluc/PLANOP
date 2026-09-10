@@ -2,13 +2,15 @@ import { useEffect, useState } from "react";
 import {
   getReminderPrefs, setReminderPrefs, testReminder, getReminderLog,
   getGcalSettings, setGcalSettings, gcalSyncNow,
+  getIssuer, setIssuer,
 } from "../lib/api";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
-import { Bell, Send, Loader2, CheckCircle2, CalendarSync, RefreshCw } from "lucide-react";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../components/ui/select";
+import { Bell, Send, Loader2, CheckCircle2, CalendarSync, RefreshCw, FileSpreadsheet } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Settings() {
@@ -19,11 +21,19 @@ export default function Settings() {
   const [gcal, setGcal] = useState({ ics_url: "", enabled: false, last_sync: null, last_count: 0 });
   const [gcalSaving, setGcalSaving] = useState(false);
   const [gcalSyncing, setGcalSyncing] = useState(false);
+  const [issuer, setIssuerState] = useState({
+    denominazione: "", nome: "", cognome: "", piva: "", codice_fiscale: "",
+    regime_fiscale: "RF01", codice_ateco: "",
+    address: "", cap: "", city: "", provincia: "", nazione: "IT",
+    telefono: "", email: "", id_paese_trasmittente: "IT", id_codice_trasmittente: "",
+  });
+  const [issuerSaving, setIssuerSaving] = useState(false);
 
   useEffect(() => {
     getReminderPrefs().then(setPrefs).catch(() => {});
     getReminderLog().then(setLog).catch(() => {});
     getGcalSettings().then(setGcal).catch(() => {});
+    getIssuer().then(setIssuerState).catch(() => {});
   }, []);
 
   const save = async () => {
@@ -59,6 +69,13 @@ export default function Settings() {
       setGcal(fresh);
     } catch (e) { toast.error(e?.response?.data?.detail || "Sync fallito"); }
     finally { setGcalSyncing(false); }
+  };
+
+  const saveIssuer = async () => {
+    setIssuerSaving(true);
+    try { await setIssuer(issuer); toast.success("Dati emittente salvati"); }
+    catch (_e) { toast.error("Errore salvataggio"); }
+    finally { setIssuerSaving(false); }
   };
 
   return (
@@ -156,6 +173,73 @@ export default function Settings() {
               Sincronizza ora
             </Button>
           </div>
+        </div>
+      </Card>
+
+      <Card className="p-6 border-slate-200 bg-white mb-6">
+        <div className="flex items-center gap-2 mb-4">
+          <FileSpreadsheet className="w-5 h-5 text-blue-700" />
+          <h2 className="font-bold font-display text-lg text-slate-900">Dati emittente per FatturaPA / Invoicex</h2>
+        </div>
+        <p className="text-sm text-slate-600 mb-4">
+          Necessari per generare l'XML FatturaPA importabile in Invoicex e per il tuo Sistema di Interscambio (SdI).
+        </p>
+        <div className="space-y-3">
+          <div>
+            <Label>Denominazione (o Nome Cognome)</Label>
+            <Input data-testid="issuer-denominazione" value={issuer.denominazione || ""} onChange={(e) => setIssuerState({ ...issuer, denominazione: e.target.value })} placeholder="Es. Enrico Lucchese o Studio Lucchese SRL" />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>P.IVA</Label>
+              <Input data-testid="issuer-piva" value={issuer.piva || ""} onChange={(e) => setIssuerState({ ...issuer, piva: e.target.value.replace(/\s/g, "") })} />
+            </div>
+            <div>
+              <Label>Codice Fiscale</Label>
+              <Input data-testid="issuer-cf" value={issuer.codice_fiscale || ""} onChange={(e) => setIssuerState({ ...issuer, codice_fiscale: e.target.value.toUpperCase() })} />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Regime fiscale</Label>
+              <Select value={issuer.regime_fiscale || "RF01"} onValueChange={(v) => setIssuerState({ ...issuer, regime_fiscale: v })}>
+                <SelectTrigger data-testid="issuer-regime" className="bg-white"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-white">
+                  <SelectItem value="RF01">RF01 - Ordinario</SelectItem>
+                  <SelectItem value="RF19">RF19 - Forfettario</SelectItem>
+                  <SelectItem value="RF02">RF02 - Contribuenti minimi</SelectItem>
+                  <SelectItem value="RF04">RF04 - Agricoltura</SelectItem>
+                  <SelectItem value="RF18">RF18 - Altro</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Codice ATECO</Label>
+              <Input data-testid="issuer-ateco" value={issuer.codice_ateco || ""} onChange={(e) => setIssuerState({ ...issuer, codice_ateco: e.target.value })} placeholder="es. 70.22.09" />
+            </div>
+          </div>
+          <div>
+            <Label>Indirizzo</Label>
+            <Input data-testid="issuer-address" value={issuer.address || ""} onChange={(e) => setIssuerState({ ...issuer, address: e.target.value })} />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <Label>CAP</Label>
+              <Input data-testid="issuer-cap" maxLength={5} value={issuer.cap || ""} onChange={(e) => setIssuerState({ ...issuer, cap: e.target.value })} />
+            </div>
+            <div>
+              <Label>Città</Label>
+              <Input data-testid="issuer-city" value={issuer.city || ""} onChange={(e) => setIssuerState({ ...issuer, city: e.target.value })} />
+            </div>
+            <div>
+              <Label>Provincia</Label>
+              <Input data-testid="issuer-provincia" maxLength={2} value={issuer.provincia || ""} onChange={(e) => setIssuerState({ ...issuer, provincia: e.target.value.toUpperCase() })} />
+            </div>
+          </div>
+          <Button data-testid="issuer-save" onClick={saveIssuer} disabled={issuerSaving} className="bg-slate-900 hover:bg-slate-800 text-white">
+            {issuerSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+            Salva dati emittente
+          </Button>
         </div>
       </Card>
 

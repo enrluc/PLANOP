@@ -60,6 +60,12 @@ export const getReminderLog = () => api.get("/reminders/log").then(r => r.data);
 export const getGcalSettings = () => api.get("/gcal/settings").then(r => r.data);
 export const setGcalSettings = (data) => api.put("/gcal/settings", data).then(r => r.data);
 export const gcalSyncNow = () => api.post("/gcal/sync").then(r => r.data);
+
+export const getIssuer = () => api.get("/settings/issuer").then(r => r.data);
+export const setIssuer = (data) => api.put("/settings/issuer", data).then(r => r.data);
+export const exportClientsCsvUrl = () => `${API}/export/invoicex/clients.csv`;
+export const exportFatturaPaUrl = (contract_id, invoice_number) =>
+  `${API}/export/fatturapa/${contract_id}${invoice_number ? `?invoice_number=${encodeURIComponent(invoice_number)}` : ""}`;
 export const aiPlanningChat = (message, session_id) =>
   api.post("/ai/planning-chat", { message, session_id }).then(r => r.data);
 export const aiChatHistory = (session_id) =>
