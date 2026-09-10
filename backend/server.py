@@ -689,6 +689,7 @@ class ManualEventIn(BaseModel):
     title: str
     client_id: Optional[str] = None
     notes: Optional[str] = ""
+    slot: str = "full"  # full | morning | afternoon
     all_day: bool = True
     start_time: Optional[str] = None  # HH:MM
     end_time: Optional[str] = None
@@ -758,18 +759,24 @@ async def export_ics(user_id: str, token: str):
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//PlanOp//IT//",
              "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "X-WR-CALNAME:PlanOp - Interventi"]
     for ev in manual:
-        d = ev["date"].replace("-", "")
-        dt_next = (datetime.fromisoformat(ev["date"]).date() + timedelta(days=1)).isoformat().replace("-", "")
         cli = clients_map.get(ev.get("client_id")) if ev.get("client_id") else None
         summary = ev.get("title", "Appuntamento")
         loc = f"{cli.get('address','')}, {cli.get('city','')}" if cli else ""
         desc = (ev.get("notes") or "").replace("\n", "\\n")
+        d = ev["date"].replace("-", "")
+        slot = ev.get("slot", "full")
+        if slot == "morning":
+            dtstart = f"{d}T090000"; dtend = f"{d}T133000"; slot_label = "Mattina"
+        elif slot == "afternoon":
+            dtstart = f"{d}T143000"; dtend = f"{d}T180000"; slot_label = "Pomeriggio"
+        else:
+            dtstart = f"{d}T090000"; dtend = f"{d}T180000"; slot_label = "Giornata intera"
         lines += [
             "BEGIN:VEVENT",
             f"UID:{ev['id']}@planop-manual",
-            f"DTSTART;VALUE=DATE:{d}",
-            f"DTEND;VALUE=DATE:{dt_next}",
-            f"SUMMARY:[Extra] {summary}",
+            f"DTSTART;TZID=Europe/Rome:{dtstart}",
+            f"DTEND;TZID=Europe/Rome:{dtend}",
+            f"SUMMARY:[Extra {slot_label}] {summary}",
             f"LOCATION:{loc}",
             f"DESCRIPTION:{desc}",
             "END:VEVENT",
