@@ -12,7 +12,7 @@ import { Plus, MapPin, Phone, Mail, Trash2, Edit3, Upload, Loader2, Download, Fi
 import { toast } from "sonner";
 import { exportClientsCsvUrl, clientsTemplateCsvUrl, importClientsCsv } from "../lib/api";
 
-const empty = { name: "", address: "", city: "", cap: "", provincia: "", contact_name: "", phone: "", email: "", piva: "", codice_fiscale: "", codice_destinatario: "", pec: "", notes: "" };
+const empty = { codice_cliente: "", name: "", address: "", city: "", cap: "", provincia: "", contact_name: "", phone: "", email: "", piva: "", codice_fiscale: "", codice_destinatario: "", pec: "", notes: "" };
 
 export default function Clients() {
   const [items, setItems] = useState([]);
@@ -47,6 +47,7 @@ export default function Clients() {
       const d = r.extracted || {};
       setEditId(null);
       setForm({
+        codice_cliente: "",
         name: d.client_name || "",
         address: d.address || "",
         city: d.city || "",
@@ -86,6 +87,7 @@ export default function Clients() {
   const edit = (c) => {
     setEditId(c.id);
     setForm({
+      codice_cliente: c.codice_cliente || "",
       name: c.name, address: c.address, city: c.city || "", cap: c.cap || "", provincia: c.provincia || "",
       contact_name: c.contact_name || "", phone: c.phone || "", email: c.email || "",
       piva: c.piva || "", codice_fiscale: c.codice_fiscale || "",
@@ -170,9 +172,15 @@ export default function Clients() {
               <DialogTitle>{editId ? "Modifica cliente" : "Nuovo cliente"}</DialogTitle>
             </DialogHeader>
             <div className="space-y-3">
-              <div>
-                <Label>Ragione sociale *</Label>
-                <Input data-testid="client-name-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <Label>Codice Cliente</Label>
+                  <Input data-testid="client-code-input" value={form.codice_cliente} onChange={(e) => setForm({ ...form, codice_cliente: e.target.value })} placeholder="C001" />
+                </div>
+                <div className="col-span-2">
+                  <Label>Ragione sociale *</Label>
+                  <Input data-testid="client-name-input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>

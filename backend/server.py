@@ -139,6 +139,7 @@ async def logout(request: Request, response: Response):
 class Client(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     user_id: str
+    codice_cliente: Optional[str] = ""
     name: str
     address: str
     city: Optional[str] = ""
@@ -158,6 +159,7 @@ class Client(BaseModel):
 
 
 class ClientIn(BaseModel):
+    codice_cliente: Optional[str] = ""
     name: str
     address: str
     city: Optional[str] = ""
@@ -176,6 +178,7 @@ class ClientIn(BaseModel):
 class Contract(BaseModel):
     id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     user_id: str
+    numero_preventivo: Optional[str] = ""
     client_id: str
     title: str
     total_days: int
@@ -191,6 +194,7 @@ class Contract(BaseModel):
 
 
 class ContractIn(BaseModel):
+    numero_preventivo: Optional[str] = ""
     client_id: str
     title: str
     total_days: int
@@ -1284,13 +1288,14 @@ async def export_invoicex_clients(user=Depends(get_current_user)):
     """Export anagrafica clienti in CSV importabile in Invoicex (import/export -> import CSV)."""
     docs = await db.clients.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(5000)
     headers = [
-        "ragione_sociale", "indirizzo", "cap", "citta", "provincia", "nazione",
+        "codice_cliente", "ragione_sociale", "indirizzo", "cap", "citta", "provincia", "nazione",
         "partita_iva", "codice_fiscale", "codice_destinatario", "pec",
         "telefono", "email", "referente", "note",
     ]
     lines = [";".join(headers)]
     for c in docs:
         row = [
+            c.get("codice_cliente", ""),
             c.get("name", ""), c.get("address", ""), c.get("cap", ""), c.get("city", ""),
             c.get("provincia", ""), "IT",
             c.get("piva", ""), c.get("codice_fiscale", ""),
@@ -1310,13 +1315,13 @@ async def export_invoicex_clients(user=Depends(get_current_user)):
 # =============== CSV IMPORT ===============
 
 CLIENTS_TEMPLATE_HEADERS = [
-    "ragione_sociale", "indirizzo", "cap", "citta", "provincia",
+    "codice_cliente", "ragione_sociale", "indirizzo", "cap", "citta", "provincia",
     "partita_iva", "codice_fiscale", "codice_destinatario", "pec",
     "telefono", "email", "referente", "note",
 ]
 
 CONTRACTS_TEMPLATE_HEADERS = [
-    "cliente_ragione_sociale", "cliente_partita_iva", "titolo",
+    "numero_preventivo", "cliente_ragione_sociale", "cliente_partita_iva", "titolo",
     "giorni_totali", "tariffa_giornaliera", "tipologia",
     "priorita", "data_firma", "data_inizio", "scadenza", "note",
 ]
@@ -1325,10 +1330,10 @@ CONTRACTS_TEMPLATE_HEADERS = [
 @api_router.get("/import/clients-template.csv")
 async def clients_template(user=Depends(get_current_user)):
     example_rows = [
-        ["ACME SRL", "Via Roma 10", "20100", "Milano", "MI",
+        ["C001", "ACME SRL", "Via Roma 10", "20100", "Milano", "MI",
          "12345678901", "", "USAL8PV", "acme@pec.it",
          "0212345", "info@acme.it", "Mario Rossi", "Cliente storico"],
-        ["Bianchi & Figli SNC", "Corso Italia 45", "10121", "Torino", "TO",
+        ["C002", "Bianchi & Figli SNC", "Corso Italia 45", "10121", "Torino", "TO",
          "", "BNCLGI80A01L219X", "0000000", "bianchi@pec.it",
          "0117654321", "bianchi@example.it", "Luigi Bianchi", ""],
     ]
@@ -1345,10 +1350,10 @@ async def clients_template(user=Depends(get_current_user)):
 @api_router.get("/import/contracts-template.csv")
 async def contracts_template(user=Depends(get_current_user)):
     example_rows = [
-        ["ACME SRL", "12345678901", "Migrazione ERP + formazione",
+        ["PREV-2026-001", "ACME SRL", "12345678901", "Migrazione ERP + formazione",
          "8", "600", "consulenza",
          "high", "2026-02-15", "2026-03-01", "2026-05-30", "Priorità massima"],
-        ["Bianchi & Figli SNC", "", "Audit sistemi informativi",
+        ["PREV-2026-002", "Bianchi & Figli SNC", "", "Audit sistemi informativi",
          "3", "500", "audit",
          "medium", "2026-02-20", "", "2026-04-30", ""],
     ]
@@ -1408,9 +1413,12 @@ async def import_clients(file: UploadFile = File(...), user=Depends(get_current_
             errors.append(f"Riga {idx}: '{name}' senza indirizzo, saltato")
             continue
         piva = r.get("partita_iva") or r.get("piva") or ""
-        # match existing by piva or name
+        codice_cli = r.get("codice_cliente") or r.get("codice") or ""
+        # match existing by codice_cliente, piva or name
         existing = None
-        if piva:
+        if codice_cli:
+            existing = await db.clients.find_one({"user_id": user["user_id"], "codice_cliente": codice_cli}, {"_id": 0})
+        if not existing and piva:
             existing = await db.clients.find_one({"user_id": user["user_id"], "piva": piva}, {"_id": 0})
         if not existing:
             existing = await db.clients.find_one(
@@ -1418,6 +1426,7 @@ async def import_clients(file: UploadFile = File(...), user=Depends(get_current_
                 {"_id": 0},
             )
         payload = {
+            "codice_cliente": codice_cli,
             "name": name,
             "address": address,
             "city": r.get("citta") or r.get("city") or "",
@@ -1510,6 +1519,7 @@ async def import_contracts(file: UploadFile = File(...), user=Depends(get_curren
         doc = {
             "id": uuid.uuid4().hex,
             "user_id": user["user_id"],
+            "numero_preventivo": r.get("numero_preventivo") or r.get("numero") or "",
             "client_id": client["id"],
             "title": title,
             "total_days": total_days,

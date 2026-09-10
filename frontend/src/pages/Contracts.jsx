@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import { exportFatturaPaUrl, contractsTemplateCsvUrl, importContractsCsv } from "../lib/api";
 
 const empty = {
-  client_id: "", title: "", total_days: 1, daily_rate: 0, intervention_type: "consulenza",
+  numero_preventivo: "", client_id: "", title: "", total_days: 1, daily_rate: 0, intervention_type: "consulenza",
   priority: "medium", start_date: "", deadline: "", signed_date: "", notes: "",
 };
 
@@ -95,6 +95,7 @@ export default function Contracts() {
       }
       setEditId(null);
       setForm({
+        numero_preventivo: "",
         client_id: clientId,
         title: d.title || "",
         total_days: Number(d.total_days) || 1,
@@ -139,6 +140,7 @@ export default function Contracts() {
   const edit = (c) => {
     setEditId(c.id);
     setForm({
+      numero_preventivo: c.numero_preventivo || "",
       client_id: c.client_id, title: c.title, total_days: c.total_days, daily_rate: c.daily_rate,
       intervention_type: c.intervention_type, priority: c.priority,
       start_date: c.start_date || "", deadline: c.deadline || "", signed_date: c.signed_date || "",
@@ -221,16 +223,22 @@ export default function Contracts() {
               <DialogTitle>{editId ? "Modifica contratto" : "Nuovo contratto"}</DialogTitle>
             </DialogHeader>
             <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-1">
-              <div>
-                <Label>Cliente *</Label>
-                <Select value={form.client_id} onValueChange={(v) => setForm({ ...form, client_id: v })}>
-                  <SelectTrigger data-testid="contract-client-select" className="bg-white"><SelectValue placeholder="Seleziona cliente" /></SelectTrigger>
-                  <SelectContent className="bg-white">
-                    {clients.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{c.name} — {c.city || c.address}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <Label>N° Preventivo</Label>
+                  <Input data-testid="contract-number-input" value={form.numero_preventivo} onChange={(e) => setForm({ ...form, numero_preventivo: e.target.value })} placeholder="PREV-2026-001" />
+                </div>
+                <div className="col-span-2">
+                  <Label>Cliente *</Label>
+                  <Select value={form.client_id} onValueChange={(v) => setForm({ ...form, client_id: v })}>
+                    <SelectTrigger data-testid="contract-client-select" className="bg-white"><SelectValue placeholder="Seleziona cliente" /></SelectTrigger>
+                    <SelectContent className="bg-white">
+                      {clients.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{c.name} — {c.city || c.address}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <div>
                 <Label>Titolo attività *</Label>
@@ -300,7 +308,11 @@ export default function Contracts() {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 mb-1">
                   <FileText className="w-4 h-4 text-slate-400" />
-                  <div className="text-xs text-slate-500">{clientName(c.client_id)} • {clientCity(c.client_id)}</div>
+                  <div className="text-xs text-slate-500">
+                    {c.numero_preventivo ? <span className="font-mono">{c.numero_preventivo}</span> : ""}
+                    {c.numero_preventivo ? " · " : ""}
+                    {clientName(c.client_id)} • {clientCity(c.client_id)}
+                  </div>
                 </div>
                 <h3 className="font-bold font-display text-slate-900 text-lg leading-tight">{c.title}</h3>
                 <div className="mt-3 flex flex-wrap gap-2">
