@@ -325,20 +325,24 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
         return {"planned": 0, "interventions": []}
 
     clients_map = {}
-    for c in contracts:
-        cli = await db.clients.find_one({"id": c["client_id"]}, {"_id": 0})
-        if cli:
-            clients_map[c["client_id"]] = cli
+    client_ids = list({c["client_id"] for c in contracts})
+    if client_ids:
+        cli_docs = await db.clients.find({"id": {"$in": client_ids}}, {"_id": 0}).to_list(1000)
+        clients_map = {cl["id"]: cl for cl in cli_docs}
 
     # Count already-planned interventions per contract
-    existing = await db.interventions.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(10000)
+    existing = await db.interventions.find(
+        {"user_id": user["user_id"]}, {"_id": 0, "contract_id": 1, "date": 1}
+    ).to_list(2000)
     planned_per_contract = {}
     booked_dates = set()
     for iv in existing:
         planned_per_contract[iv["contract_id"]] = planned_per_contract.get(iv["contract_id"], 0) + 1
         booked_dates.add(iv["date"])
     # Manual events block their dates
-    manual = await db.manual_events.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(10000)
+    manual = await db.manual_events.find(
+        {"user_id": user["user_id"]}, {"_id": 0, "date": 1, "all_day": 1}
+    ).to_list(2000)
     for ev in manual:
         if ev.get("all_day", True):
             booked_dates.add(ev["date"])
@@ -456,7 +460,7 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
 
 @api_router.get("/interventions")
 async def list_interventions(user=Depends(get_current_user)):
-    docs = await db.interventions.find({"user_id": user["user_id"]}, {"_id": 0}).sort("date", 1).to_list(10000)
+    docs = await db.interventions.find({"user_id": user["user_id"]}, {"_id": 0}).sort("date", 1).to_list(2000)
     return docs
 
 
@@ -533,27 +537,25 @@ async def export_ics(user_id: str, token: str):
     sess = await db.user_sessions.find_one({"session_token": token, "user_id": user_id}, {"_id": 0})
     if not sess:
         raise HTTPException(401, "Invalid token")
-    ivs = await db.interventions.find({"user_id": user_id}, {"_id": 0}).to_list(10000)
+    ivs = await db.interventions.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
+    manual = await db.manual_events.find({"user_id": user_id}, {"_id": 0}).to_list(2000)
+    # Bulk fetch contracts + clients in 2 queries (avoid N+1)
+    contract_ids = list({iv["contract_id"] for iv in ivs})
+    client_ids = list({iv["client_id"] for iv in ivs} | {ev["client_id"] for ev in manual if ev.get("client_id")})
     contracts_map = {}
     clients_map = {}
-    for iv in ivs:
-        if iv["contract_id"] not in contracts_map:
-            c = await db.contracts.find_one({"id": iv["contract_id"]}, {"_id": 0})
-            if c:
-                contracts_map[iv["contract_id"]] = c
-        if iv["client_id"] not in clients_map:
-            cli = await db.clients.find_one({"id": iv["client_id"]}, {"_id": 0})
-            if cli:
-                clients_map[iv["client_id"]] = cli
-    manual = await db.manual_events.find({"user_id": user_id}, {"_id": 0}).to_list(10000)
+    if contract_ids:
+        c_docs = await db.contracts.find({"id": {"$in": contract_ids}}, {"_id": 0}).to_list(1000)
+        contracts_map = {c["id"]: c for c in c_docs}
+    if client_ids:
+        cl_docs = await db.clients.find({"id": {"$in": client_ids}}, {"_id": 0}).to_list(1000)
+        clients_map = {cl["id"]: cl for cl in cl_docs}
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//PlanOp//IT//",
              "CALSCALE:GREGORIAN", "METHOD:PUBLISH", "X-WR-CALNAME:PlanOp - Interventi"]
     for ev in manual:
         d = ev["date"].replace("-", "")
         dt_next = (datetime.fromisoformat(ev["date"]).date() + timedelta(days=1)).isoformat().replace("-", "")
-        cli = None
-        if ev.get("client_id"):
-            cli = await db.clients.find_one({"id": ev["client_id"]}, {"_id": 0})
+        cli = clients_map.get(ev.get("client_id")) if ev.get("client_id") else None
         summary = ev.get("title", "Appuntamento")
         loc = f"{cli.get('address','')}, {cli.get('city','')}" if cli else ""
         desc = (ev.get("notes") or "").replace("\n", "\\n")
@@ -729,7 +731,9 @@ async def generate_invoice(payload: InvoiceReq, user=Depends(get_current_user)):
 @api_router.get("/dashboard/stats")
 async def stats(user=Depends(get_current_user)):
     contracts = await db.contracts.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(1000)
-    ivs = await db.interventions.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(10000)
+    ivs = await db.interventions.find(
+        {"user_id": user["user_id"]}, {"_id": 0, "id": 1, "date": 1, "contract_id": 1, "day_index": 1}
+    ).to_list(2000)
     clients = await db.clients.count_documents({"user_id": user["user_id"]})
     active = sum(1 for c in contracts if c["status"] in ("active", "planned"))
     total_days = sum(c["total_days"] for c in contracts)
@@ -824,8 +828,12 @@ async def planning_chat(payload: ChatIn, user=Depends(get_current_user)):
     # Load context
     contracts = await db.contracts.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(200)
     clients = await db.clients.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(200)
-    ivs = await db.interventions.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(1000)
-    manual = await db.manual_events.find({"user_id": user["user_id"]}, {"_id": 0}).to_list(500)
+    ivs = await db.interventions.find(
+        {"user_id": user["user_id"]}, {"_id": 0, "contract_id": 1, "date": 1}
+    ).to_list(1000)
+    manual = await db.manual_events.find(
+        {"user_id": user["user_id"]}, {"_id": 0, "date": 1, "title": 1}
+    ).to_list(500)
 
     context = {
         "today": date.today().isoformat(),
