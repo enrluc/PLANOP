@@ -64,6 +64,18 @@ export const gcalSyncNow = () => api.post("/gcal/sync").then(r => r.data);
 export const getIssuer = () => api.get("/settings/issuer").then(r => r.data);
 export const setIssuer = (data) => api.put("/settings/issuer", data).then(r => r.data);
 export const exportClientsCsvUrl = () => `${API}/export/invoicex/clients.csv`;
+export const clientsTemplateCsvUrl = () => `${API}/import/clients-template.csv`;
+export const contractsTemplateCsvUrl = () => `${API}/import/contracts-template.csv`;
+export const importClientsCsv = (file) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return api.post("/import/clients", fd, { headers: { "Content-Type": "multipart/form-data" } }).then(r => r.data);
+};
+export const importContractsCsv = (file) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return api.post("/import/contracts", fd, { headers: { "Content-Type": "multipart/form-data" } }).then(r => r.data);
+};
 export const exportFatturaPaUrl = (contract_id, invoice_number) =>
   `${API}/export/fatturapa/${contract_id}${invoice_number ? `?invoice_number=${encodeURIComponent(invoice_number)}` : ""}`;
 export const aiPlanningChat = (message, session_id) =>

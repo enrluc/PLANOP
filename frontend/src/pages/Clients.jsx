@@ -8,9 +8,9 @@ import { Textarea } from "../components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from "../components/ui/dialog";
-import { Plus, MapPin, Phone, Mail, Trash2, Edit3, Upload, Loader2, Download } from "lucide-react";
+import { Plus, MapPin, Phone, Mail, Trash2, Edit3, Upload, Loader2, Download, FileDown } from "lucide-react";
 import { toast } from "sonner";
-import { exportClientsCsvUrl } from "../lib/api";
+import { exportClientsCsvUrl, clientsTemplateCsvUrl, importClientsCsv } from "../lib/api";
 
 const empty = { name: "", address: "", city: "", cap: "", provincia: "", contact_name: "", phone: "", email: "", piva: "", codice_fiscale: "", codice_destinatario: "", pec: "", notes: "" };
 
@@ -21,9 +21,22 @@ export default function Clients() {
   const [editId, setEditId] = useState(null);
   const [importing, setImporting] = useState(false);
   const fileRef = useRef(null);
+  const csvRef = useRef(null);
 
   const load = () => listClients().then(setItems).catch(() => {});
   useEffect(() => { load(); }, []);
+
+  const handleImportCsv = async (file) => {
+    if (!file) return;
+    setImporting(true);
+    try {
+      const r = await importClientsCsv(file);
+      toast.success(`${r.imported} nuovi, ${r.updated} aggiornati${r.errors?.length ? " · alcuni errori" : ""}`);
+      if (r.errors?.length) console.warn("CSV import errors:", r.errors);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Import CSV fallito"); }
+    finally { setImporting(false); if (csvRef.current) csvRef.current.value = ""; }
+  };
 
   const handleImportPdf = async (file) => {
     if (!file) return;
@@ -105,14 +118,38 @@ export default function Clients() {
             data-testid="client-pdf-input"
             onChange={(e) => handleImportPdf(e.target.files?.[0])}
           />
+          <input
+            ref={csvRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            data-testid="client-csv-input"
+            onChange={(e) => handleImportCsv(e.target.files?.[0])}
+          />
+          <Button
+            data-testid="clients-template-button"
+            variant="outline"
+            onClick={() => window.open(clientsTemplateCsvUrl(), "_blank")}
+          >
+            <FileDown className="w-4 h-4 mr-2" />
+            Modello CSV
+          </Button>
+          <Button
+            data-testid="import-clients-csv-button"
+            variant="outline"
+            onClick={() => csvRef.current?.click()}
+            disabled={importing}
+          >
+            {importing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            Importa CSV
+          </Button>
           <Button
             data-testid="import-client-pdf-button"
             variant="outline"
             onClick={() => fileRef.current?.click()}
             disabled={importing}
           >
-            {importing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-            Importa da PDF
+            <Upload className="w-4 h-4 mr-2" /> PDF
           </Button>
           <Button
             data-testid="export-invoicex-csv-button"

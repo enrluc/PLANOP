@@ -14,9 +14,9 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from "../components/ui/dialog";
-import { Plus, FileText, Trash2, Edit3, CheckCircle2, RotateCcw, Upload, Loader2, FileCode } from "lucide-react";
+import { Plus, FileText, Trash2, Edit3, CheckCircle2, RotateCcw, Upload, Loader2, FileCode, FileDown } from "lucide-react";
 import { toast } from "sonner";
-import { exportFatturaPaUrl } from "../lib/api";
+import { exportFatturaPaUrl, contractsTemplateCsvUrl, importContractsCsv } from "../lib/api";
 
 const empty = {
   client_id: "", title: "", total_days: 1, daily_rate: 0, intervention_type: "consulenza",
@@ -44,10 +44,25 @@ export default function Contracts() {
   const [editId, setEditId] = useState(null);
   const [importing, setImporting] = useState(false);
   const fileRef = useRef(null);
+  const csvRef = useRef(null);
 
   const load = () => Promise.all([listContracts(), listClients()])
     .then(([cs, cls]) => { setItems(cs); setClients(cls); }).catch(() => {});
   useEffect(() => { load(); }, []);
+
+  const handleImportCsv = async (file) => {
+    if (!file) return;
+    setImporting(true);
+    try {
+      const r = await importContractsCsv(file);
+      toast.success(`${r.imported} preventivi importati${r.errors?.length ? ` · ${r.errors.length} errori` : ""}`);
+      if (r.errors?.length) {
+        r.errors.slice(0, 3).forEach((msg) => toast.error(msg));
+      }
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Import CSV fallito"); }
+    finally { setImporting(false); if (csvRef.current) csvRef.current.value = ""; }
+  };
 
   const handleImportPdf = async (file) => {
     if (!file) return;
@@ -162,14 +177,38 @@ export default function Contracts() {
             data-testid="contract-pdf-input"
             onChange={(e) => handleImportPdf(e.target.files?.[0])}
           />
+          <input
+            ref={csvRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            data-testid="contract-csv-input"
+            onChange={(e) => handleImportCsv(e.target.files?.[0])}
+          />
+          <Button
+            data-testid="contracts-template-button"
+            variant="outline"
+            onClick={() => window.open(contractsTemplateCsvUrl(), "_blank")}
+          >
+            <FileDown className="w-4 h-4 mr-2" />
+            Modello CSV
+          </Button>
+          <Button
+            data-testid="import-contracts-csv-button"
+            variant="outline"
+            onClick={() => csvRef.current?.click()}
+            disabled={importing}
+          >
+            {importing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
+            Importa CSV
+          </Button>
           <Button
             data-testid="import-contract-pdf-button"
             variant="outline"
             onClick={() => fileRef.current?.click()}
             disabled={importing}
           >
-            {importing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Upload className="w-4 h-4 mr-2" />}
-            Importa da PDF
+            <Upload className="w-4 h-4 mr-2" /> PDF
           </Button>
         <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setEditId(null); setForm(empty); } }}>
           <DialogTrigger asChild>

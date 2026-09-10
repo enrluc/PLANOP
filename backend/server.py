@@ -1307,6 +1307,227 @@ async def export_invoicex_clients(user=Depends(get_current_user)):
     )
 
 
+# =============== CSV IMPORT ===============
+
+CLIENTS_TEMPLATE_HEADERS = [
+    "ragione_sociale", "indirizzo", "cap", "citta", "provincia",
+    "partita_iva", "codice_fiscale", "codice_destinatario", "pec",
+    "telefono", "email", "referente", "note",
+]
+
+CONTRACTS_TEMPLATE_HEADERS = [
+    "cliente_ragione_sociale", "cliente_partita_iva", "titolo",
+    "giorni_totali", "tariffa_giornaliera", "tipologia",
+    "priorita", "data_firma", "data_inizio", "scadenza", "note",
+]
+
+
+@api_router.get("/import/clients-template.csv")
+async def clients_template(user=Depends(get_current_user)):
+    example_rows = [
+        ["ACME SRL", "Via Roma 10", "20100", "Milano", "MI",
+         "12345678901", "", "USAL8PV", "acme@pec.it",
+         "0212345", "info@acme.it", "Mario Rossi", "Cliente storico"],
+        ["Bianchi & Figli SNC", "Corso Italia 45", "10121", "Torino", "TO",
+         "", "BNCLGI80A01L219X", "0000000", "bianchi@pec.it",
+         "0117654321", "bianchi@example.it", "Luigi Bianchi", ""],
+    ]
+    lines = [";".join(CLIENTS_TEMPLATE_HEADERS)]
+    for row in example_rows:
+        lines.append(";".join(_csv_escape(x) for x in row))
+    body = "\ufeff" + "\r\n".join(lines)
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=modello-clienti.csv"},
+    )
+
+
+@api_router.get("/import/contracts-template.csv")
+async def contracts_template(user=Depends(get_current_user)):
+    example_rows = [
+        ["ACME SRL", "12345678901", "Migrazione ERP + formazione",
+         "8", "600", "consulenza",
+         "high", "2026-02-15", "2026-03-01", "2026-05-30", "Priorità massima"],
+        ["Bianchi & Figli SNC", "", "Audit sistemi informativi",
+         "3", "500", "audit",
+         "medium", "2026-02-20", "", "2026-04-30", ""],
+    ]
+    lines = [";".join(CONTRACTS_TEMPLATE_HEADERS)]
+    for row in example_rows:
+        lines.append(";".join(_csv_escape(x) for x in row))
+    body = "\ufeff" + "\r\n".join(lines)
+    return Response(
+        content=body, media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=modello-preventivi.csv"},
+    )
+
+
+def _read_csv(raw: bytes) -> tuple:
+    """Return (headers, rows). Detect ; or , separator. Strip BOM."""
+    text = raw.decode("utf-8-sig", errors="replace")
+    # Detect separator on first line
+    first_line = text.splitlines()[0] if text else ""
+    sep = ";" if first_line.count(";") >= first_line.count(",") else ","
+    import csv as _csv
+    reader = _csv.reader(io.StringIO(text), delimiter=sep, quotechar='"')
+    rows = list(reader)
+    if not rows:
+        return [], []
+    headers = [h.strip().lower() for h in rows[0]]
+    return headers, rows[1:]
+
+
+def _row_dict(headers: list, row: list) -> dict:
+    d = {}
+    for i, h in enumerate(headers):
+        d[h] = (row[i].strip() if i < len(row) else "")
+    return d
+
+
+@api_router.post("/import/clients")
+async def import_clients(file: UploadFile = File(...), user=Depends(get_current_user)):
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(400, "Il file deve essere un CSV")
+    raw = await file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(413, "CSV troppo grande (max 5MB)")
+    headers, rows = _read_csv(raw)
+    if not headers:
+        raise HTTPException(422, "CSV vuoto")
+
+    imported = 0
+    updated = 0
+    errors = []
+    for idx, row in enumerate(rows, start=2):  # start=2 accounts for header row
+        r = _row_dict(headers, row)
+        name = r.get("ragione_sociale") or r.get("nome") or r.get("name") or ""
+        if not name:
+            continue
+        address = r.get("indirizzo") or r.get("address") or ""
+        if not address:
+            errors.append(f"Riga {idx}: '{name}' senza indirizzo, saltato")
+            continue
+        piva = r.get("partita_iva") or r.get("piva") or ""
+        # match existing by piva or name
+        existing = None
+        if piva:
+            existing = await db.clients.find_one({"user_id": user["user_id"], "piva": piva}, {"_id": 0})
+        if not existing:
+            existing = await db.clients.find_one(
+                {"user_id": user["user_id"], "name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}},
+                {"_id": 0},
+            )
+        payload = {
+            "name": name,
+            "address": address,
+            "city": r.get("citta") or r.get("city") or "",
+            "cap": r.get("cap") or "",
+            "provincia": (r.get("provincia") or "").upper()[:2],
+            "contact_name": r.get("referente") or r.get("contact_name") or "",
+            "phone": r.get("telefono") or r.get("phone") or "",
+            "email": r.get("email") or "",
+            "piva": piva,
+            "codice_fiscale": (r.get("codice_fiscale") or r.get("cf") or "").upper(),
+            "codice_destinatario": (r.get("codice_destinatario") or r.get("sdi") or "").upper(),
+            "pec": r.get("pec") or "",
+            "notes": r.get("note") or r.get("notes") or "",
+        }
+        coords = await geocode(payload["address"], payload["city"])
+        if coords:
+            payload["lat"] = coords["lat"]
+            payload["lng"] = coords["lng"]
+        if existing:
+            await db.clients.update_one({"id": existing["id"]}, {"$set": payload})
+            updated += 1
+        else:
+            doc = {"id": uuid.uuid4().hex, "user_id": user["user_id"],
+                   "created_at": datetime.now(timezone.utc).isoformat(), **payload}
+            await db.clients.insert_one(doc)
+            imported += 1
+    return {"imported": imported, "updated": updated, "errors": errors[:20], "rows_total": len(rows)}
+
+
+@api_router.post("/import/contracts")
+async def import_contracts(file: UploadFile = File(...), user=Depends(get_current_user)):
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(400, "Il file deve essere un CSV")
+    raw = await file.read()
+    if len(raw) > 5 * 1024 * 1024:
+        raise HTTPException(413, "CSV troppo grande (max 5MB)")
+    headers, rows = _read_csv(raw)
+    if not headers:
+        raise HTTPException(422, "CSV vuoto")
+
+    imported = 0
+    errors = []
+    for idx, row in enumerate(rows, start=2):
+        r = _row_dict(headers, row)
+        client_name = r.get("cliente_ragione_sociale") or r.get("cliente") or r.get("client_name") or ""
+        client_piva = r.get("cliente_partita_iva") or r.get("cliente_piva") or ""
+        title = r.get("titolo") or r.get("title") or ""
+        days_raw = r.get("giorni_totali") or r.get("giorni") or r.get("total_days") or ""
+        if not title or not days_raw:
+            errors.append(f"Riga {idx}: titolo o giorni_totali mancante, saltata")
+            continue
+        try:
+            total_days = int(float(days_raw.replace(",", ".")))
+        except Exception:
+            errors.append(f"Riga {idx}: giorni_totali non numerico '{days_raw}'")
+            continue
+        # Match client
+        client = None
+        if client_piva:
+            client = await db.clients.find_one({"user_id": user["user_id"], "piva": client_piva}, {"_id": 0})
+        if not client and client_name:
+            client = await db.clients.find_one(
+                {"user_id": user["user_id"], "name": {"$regex": f"^{re.escape(client_name)}$", "$options": "i"}},
+                {"_id": 0},
+            )
+        if not client:
+            errors.append(f"Riga {idx}: cliente '{client_name}' non trovato in anagrafica, saltata")
+            continue
+
+        rate_raw = (r.get("tariffa_giornaliera") or r.get("tariffa") or "0").replace(",", ".")
+        try:
+            daily_rate = float(rate_raw)
+        except Exception:
+            daily_rate = 0.0
+        priority = (r.get("priorita") or r.get("priority") or "medium").lower()
+        if priority not in ("high", "medium", "low"):
+            priority = "medium"
+
+        def _norm_date(s: str) -> Optional[str]:
+            s = (s or "").strip()
+            if not s:
+                return None
+            for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                try:
+                    return datetime.strptime(s, fmt).date().isoformat()
+                except Exception:
+                    continue
+            return None
+
+        doc = {
+            "id": uuid.uuid4().hex,
+            "user_id": user["user_id"],
+            "client_id": client["id"],
+            "title": title,
+            "total_days": total_days,
+            "daily_rate": daily_rate,
+            "intervention_type": r.get("tipologia") or r.get("intervention_type") or "consulenza",
+            "priority": priority,
+            "start_date": _norm_date(r.get("data_inizio") or r.get("start_date") or ""),
+            "deadline": _norm_date(r.get("scadenza") or r.get("deadline") or ""),
+            "signed_date": _norm_date(r.get("data_firma") or r.get("signed_date") or ""),
+            "status": "active",
+            "notes": r.get("note") or r.get("notes") or "",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.contracts.insert_one(doc)
+        imported += 1
+    return {"imported": imported, "errors": errors[:20], "rows_total": len(rows)}
+
+
 def _xml_escape(v) -> str:
     s = "" if v is None else str(v)
     return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
