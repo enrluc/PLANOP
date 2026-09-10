@@ -481,9 +481,46 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
         total_days_f = float(c["total_days"])
         has_half = (total_days_f - int(total_days_f)) > 0
         total_needed = math.ceil(total_days_f)
+        # RESERVED END DATES: se c'è deadline e servono >=1 interventi, riserva gli ultimi
+        # 2 (o 1 se total_needed==1) sui workday finali che finiscono alla deadline
+        reserved_end = []  # list of (day_index, date, slot)
+        if c_deadline and total_needed >= 1 and done_for_contract == 0:
+            n_reserve = 2 if total_needed >= 2 else 1
+            end_d = c_deadline
+            if payload.workdays_only:
+                while end_d.weekday() >= 5:
+                    end_d = end_d - timedelta(days=1)
+            while end_d.isoformat() in booked_dates and end_d >= cur:
+                end_d = end_d - timedelta(days=1)
+                if payload.workdays_only:
+                    while end_d.weekday() >= 5:
+                        end_d = end_d - timedelta(days=1)
+            if end_d >= cur:
+                slot_last = "morning" if has_half else "full"
+                reserved_pairs = [(total_needed, end_d, slot_last)]
+                if n_reserve == 2:
+                    prev_d = end_d - timedelta(days=1)
+                    if payload.workdays_only:
+                        while prev_d.weekday() >= 5:
+                            prev_d = prev_d - timedelta(days=1)
+                    while prev_d.isoformat() in booked_dates and prev_d >= cur:
+                        prev_d = prev_d - timedelta(days=1)
+                        if payload.workdays_only:
+                            while prev_d.weekday() >= 5:
+                                prev_d = prev_d - timedelta(days=1)
+                    if prev_d >= cur:
+                        reserved_pairs.insert(0, (total_needed - 1, prev_d, "full"))
+                for day_idx, dt, slot in reserved_pairs:
+                    booked_dates.add(dt.isoformat())
+                    if max_pm:
+                        mk = (c["id"], dt.isoformat()[:7])
+                        per_month_count[mk] = per_month_count.get(mk, 0) + 1
+                    reserved_end.append((day_idx, dt, slot))
+        # Riduci rem del numero di date riservate: il loop pianifica solo i giorni "iniziali"
+        rem_body = max(0, rem - len(reserved_end))
         contract_full = False
-        while rem > 0 and not contract_full:
-            block = min(max_block, rem)
+        while rem_body > 0 and not contract_full:
+            block = min(max_block, rem_body)
             for _ in range(block):
                 # Skip weekends + booked
                 if payload.workdays_only:
@@ -497,7 +534,7 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
                         if c_deadline and cur > c_deadline:
                             break
                 if c_deadline and cur > c_deadline:
-                    skipped.append({"contract_id": c["id"], "reason": "deadline_reached", "remaining": rem})
+                    skipped.append({"contract_id": c["id"], "reason": "deadline_reached", "remaining": rem_body})
                     contract_full = True
                     break
                 # Enforce max_per_month cap
@@ -522,7 +559,7 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
                             break
                         mkey = (c["id"], cur.isoformat()[:7])
                     if c_deadline and cur > c_deadline:
-                        skipped.append({"contract_id": c["id"], "reason": "deadline_reached", "remaining": rem})
+                        skipped.append({"contract_id": c["id"], "reason": "deadline_reached", "remaining": rem_body})
                         contract_full = True
                         break
                 iv = Intervention(
@@ -530,7 +567,7 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
                     contract_id=c["id"],
                     client_id=c["client_id"],
                     date=cur.isoformat(),
-                    slot=("morning" if (has_half and (done_for_contract + 1) == total_needed) else "full"),
+                    slot="full",
                     day_index=done_for_contract + 1,
                 )
                 new_interventions.append(iv.model_dump())
@@ -540,7 +577,18 @@ async def generate_planning(payload: PlanRequest, user=Depends(get_current_user)
                     per_month_count[mkey] = per_month_count.get(mkey, 0) + 1
                 done_for_contract += 1
                 cur = cur + timedelta(days=1)
-                rem -= 1
+                rem_body -= 1
+        # Append reserved end interventions with the correct final day_index
+        for day_idx, dt, slot in reserved_end:
+            iv = Intervention(
+                user_id=user["user_id"],
+                contract_id=c["id"],
+                client_id=c["client_id"],
+                date=dt.isoformat(),
+                slot=slot,
+                day_index=day_idx,
+            )
+            new_interventions.append(iv.model_dump())
 
     response_items = []
     if new_interventions:
