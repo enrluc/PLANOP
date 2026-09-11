@@ -93,9 +93,8 @@ jobs:
       - name: Electron builder (Windows NSIS installer)
         working-directory: electron
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder --win --x64 -c.publish=null
+        run: npx electron-builder --win --x64
 
       # -----------------------------------------------------------------
       # 5) Upload artifact (scaricabile dalla pagina Actions)

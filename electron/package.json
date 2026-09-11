@@ -7,13 +7,17 @@
   "author": "PlanOp",
   "license": "UNLICENSED",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/local/planop-desktop.git"
+  },
   "scripts": {
     "start": "electron .",
     "build:win": "electron-builder --win --x64"
   },
   "devDependencies": {
     "electron": "31.3.1",
-    "electron-builder": "24.13.3"
+    "electron-builder": "25.1.8"
   },
   "dependencies": {
     "electron-log": "5.1.7",
@@ -22,7 +26,10 @@
   "build": {
     "appId": "com.planop.desktop",
     "productName": "PlanOp",
-    "publish": null,
+    "publish": [
+      { "provider": "generic", "url": "https://example.invalid/updates/" }
+    ],
+    "generateUpdatesFilesForAllChannels": false,
     "directories": {
       "output": "dist",
       "buildResources": "build-resources"
