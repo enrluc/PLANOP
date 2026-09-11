@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   listInterventions, listContracts, listClients, getSubscribeUrl,
   listManualEvents, createManualEvent, deleteManualEvent, reschedulePlan,
-  confirmIntervention, unconfirmIntervention, updateIntervention,
+  confirmIntervention, unconfirmIntervention, updateIntervention, acceptIntervention,
 } from "../lib/api";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -117,6 +117,35 @@ export default function CalendarPage() {
     } catch (_e) { toast.error("Errore"); }
   };
 
+  const doAccept = async () => {
+    try {
+      await acceptIntervention(detailItem.id);
+      toast.success("Segnato come ACCETTATO dal cliente");
+      const fresh = await listInterventions();
+      setIvs(fresh);
+      const updated = fresh.find((x) => x.id === detailItem.id);
+      if (updated) setDetailItem({ ...updated, _kind: "iv" });
+    } catch (_e) { toast.error("Errore"); }
+  };
+
+  const handleDrop = async (e, targetIso) => {
+    e.preventDefault();
+    const id = e.dataTransfer.getData("text/plain");
+    if (!id) return;
+    const iv = ivs.find((x) => x.id === id);
+    if (!iv || iv.date === targetIso) return;
+    try {
+      await updateIntervention(id, { date: targetIso });
+      toast.success(`Spostato al ${targetIso}`);
+      const fresh = await listInterventions();
+      setIvs(fresh);
+      const updated = fresh.find((x) => x.id === id);
+      if (updated) { setDetailItem({ ...updated, _kind: "iv" }); setDetailOpen(true); }
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Errore spostamento");
+    }
+  };
+
   const changeSlotInDetail = async (newSlot) => {
     try {
       await updateIntervention(detailItem.id, { slot: newSlot });
@@ -184,6 +213,8 @@ export default function CalendarPage() {
               <div
                 key={idx}
                 data-testid={`day-cell-${cell.iso}`}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => handleDrop(e, cell.iso)}
                 className={`min-h-[72px] sm:min-h-[110px] p-1.5 sm:p-2 rounded-md border text-left overflow-hidden transition-colors ${
                   isToday ? "border-blue-600 bg-blue-50/50" : "border-slate-100 bg-slate-50/40"
                 }`}
@@ -218,20 +249,31 @@ export default function CalendarPage() {
                     }
                     const clic = cli(it.client_id);
                     const c = ctr(it.contract_id);
-                    const isConfirmed = it.status === "confirmed";
-                    const cls = isConfirmed ? "bg-emerald-100 text-emerald-800 hover:bg-emerald-200" : "bg-blue-100 text-blue-800 hover:bg-blue-200";
+                    // Color coding: planned=giallo, confirmed(email inviata)=bianco, accepted=verde
+                    let cls;
+                    if (it.status === "accepted") {
+                      cls = "bg-emerald-500 text-white hover:bg-emerald-600 border border-emerald-600";
+                    } else if (it.status === "confirmed") {
+                      cls = "bg-white text-slate-900 border border-slate-300 hover:bg-slate-50";
+                    } else {
+                      cls = "bg-yellow-300 text-yellow-950 hover:bg-yellow-400 border border-yellow-500";
+                    }
                     return (
                       <button
                         type="button"
                         key={it.id}
+                        draggable
+                        onDragStart={(e) => { e.dataTransfer.setData("text/plain", it.id); e.dataTransfer.effectAllowed = "move"; }}
                         onClick={() => openDetail(it)}
                         data-testid={`event-${it.id}`}
-                        className={`w-full text-[10px] leading-tight px-1.5 py-1 rounded truncate text-left ${cls}`}
+                        className={`w-full text-[10px] leading-tight px-1.5 py-1 rounded truncate text-left cursor-move ${cls}`}
+                        title="Trascina per spostare"
                       >
                         <span className="font-mono mr-1">{SLOT_SHORT[it.slot || "full"]}</span>
                         <span className="font-semibold">{clic?.name?.slice(0, 12) || "—"}</span>
                         <span className="hidden sm:inline"> · g{it.day_index}/{c?.total_days}</span>
-                        {isConfirmed && <span className="ml-1">✓</span>}
+                        {it.status === "accepted" && <span className="ml-1">✓✓</span>}
+                        {it.status === "confirmed" && <span className="ml-1">✉</span>}
                       </button>
                     );
                   })}
@@ -303,17 +345,23 @@ export default function CalendarPage() {
           {detailItem && detailItem._kind === "iv" ? (() => {
             const clic = cli(detailItem.client_id);
             const c = ctr(detailItem.contract_id);
-            const confirmed = detailItem.status === "confirmed";
+            const status = detailItem.status || "planned";
+            const isAccepted = status === "accepted";
+            const isConfirmed = status === "confirmed";
             return (
               <>
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-2">
-                    {confirmed ? (
-                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded-md font-medium uppercase tracking-wide">
-                        <CheckCircle2 className="w-3 h-3" /> Confermato
+                    {isAccepted ? (
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-emerald-500 text-white rounded-md font-medium uppercase tracking-wide">
+                        <CheckCircle2 className="w-3 h-3" /> Accettato dal cliente
+                      </span>
+                    ) : isConfirmed ? (
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 bg-white text-slate-900 border border-slate-300 rounded-md font-medium uppercase tracking-wide">
+                        <Mail className="w-3 h-3" /> Email inviata
                       </span>
                     ) : (
-                      <span className="text-xs px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md font-medium uppercase tracking-wide">Pianificato</span>
+                      <span className="text-xs px-2 py-0.5 bg-yellow-300 text-yellow-950 border border-yellow-500 rounded-md font-medium uppercase tracking-wide">Pianificato</span>
                     )}
                     <span className="text-slate-900">{c?.title || "Intervento"}</span>
                   </DialogTitle>
@@ -333,7 +381,7 @@ export default function CalendarPage() {
                     <Label className="text-xs uppercase tracking-wider text-slate-500 flex items-center gap-1 mb-1">
                       <Clock className="w-3 h-3" /> Fascia oraria
                     </Label>
-                    <Select value={detailItem.slot || "full"} onValueChange={changeSlotInDetail} disabled={confirmed}>
+                    <Select value={detailItem.slot || "full"} onValueChange={changeSlotInDetail} disabled={isConfirmed || isAccepted}>
                       <SelectTrigger data-testid="detail-slot-select" className="bg-white"><SelectValue /></SelectTrigger>
                       <SelectContent className="bg-white">
                         <SelectItem value="full">{SLOT_LABEL.full}</SelectItem>
@@ -358,19 +406,34 @@ export default function CalendarPage() {
                       <div className="text-xs text-slate-700 bg-slate-50 p-2 rounded border border-slate-100">{c.notes}</div>
                     </div>
                   )}
-                  {confirmed && detailItem.confirmed_at && (
+                  {isConfirmed && detailItem.confirmed_at && (
+                    <div className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded p-2">
+                      <div>Email di conferma inviata il {new Date(detailItem.confirmed_at).toLocaleString("it-IT")}</div>
+                      <div className="mt-1 text-slate-500">In attesa risposta cliente a <span className="font-mono">enrluc@gmail.com</span></div>
+                    </div>
+                  )}
+                  {isAccepted && detailItem.accepted_at && (
                     <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-2">
-                      Email di conferma inviata il {new Date(detailItem.confirmed_at).toLocaleString("it-IT")}
+                      Accettazione registrata il {new Date(detailItem.accepted_at).toLocaleString("it-IT")}
                     </div>
                   )}
                 </div>
-                <DialogFooter>
-                  {confirmed ? (
-                    <Button data-testid="detail-unconfirm" variant="outline" onClick={doUnconfirm}>Annulla conferma</Button>
-                  ) : (
-                    <Button data-testid="detail-confirm" onClick={doConfirm} className="bg-emerald-700 hover:bg-emerald-800 text-white">
-                      <Mail className="w-4 h-4 mr-2" /> Conferma + invia email
+                <DialogFooter className="flex gap-2">
+                  {!isConfirmed && !isAccepted && (
+                    <Button data-testid="detail-confirm" onClick={doConfirm} className="bg-slate-900 hover:bg-slate-800 text-white">
+                      <Mail className="w-4 h-4 mr-2" /> Invia email conferma
                     </Button>
+                  )}
+                  {isConfirmed && !isAccepted && (
+                    <>
+                      <Button data-testid="detail-accept" onClick={doAccept} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                        <CheckCircle2 className="w-4 h-4 mr-2" /> Cliente ha accettato
+                      </Button>
+                      <Button data-testid="detail-unconfirm" variant="outline" onClick={doUnconfirm}>Annulla email</Button>
+                    </>
+                  )}
+                  {isAccepted && (
+                    <Button data-testid="detail-unconfirm" variant="outline" onClick={doUnconfirm}>Riporta a pianificato</Button>
                   )}
                 </DialogFooter>
               </>

@@ -217,8 +217,9 @@ class Intervention(BaseModel):
     date: str  # YYYY-MM-DD
     slot: str = "full"  # full | morning | afternoon
     day_index: int  # 1..total_days
-    status: str = "planned"  # planned | confirmed | done | cancelled
+    status: str = "planned"  # planned | confirmed | accepted | done | cancelled
     confirmed_at: Optional[str] = None
+    accepted_at: Optional[str] = None
     confirmation_email_id: Optional[str] = None
     notes: Optional[str] = ""
 
@@ -646,6 +647,7 @@ def _confirmation_html(client_name: str, intervention_date: str, slot: str,
 class InterventionUpdate(BaseModel):
     slot: Optional[str] = None  # full | morning | afternoon
     notes: Optional[str] = None
+    date: Optional[str] = None  # YYYY-MM-DD (drag&drop or manual reschedule)
 
 
 @api_router.put("/interventions/{intervention_id}")
@@ -660,10 +662,35 @@ async def update_intervention(intervention_id: str, payload: InterventionUpdate,
         updates["slot"] = payload.slot
     if payload.notes is not None:
         updates["notes"] = payload.notes
+    if payload.date is not None:
+        try:
+            datetime.fromisoformat(payload.date)
+        except Exception:
+            raise HTTPException(400, "Data non valida (usa YYYY-MM-DD)")
+        # Prevent double-booking
+        clash = await db.interventions.find_one(
+            {"user_id": user["user_id"], "date": payload.date, "id": {"$ne": intervention_id}},
+            {"_id": 0},
+        )
+        if clash:
+            raise HTTPException(409, f"Data {payload.date} già occupata da altro intervento")
+        updates["date"] = payload.date
     if updates:
         await db.interventions.update_one({"id": intervention_id}, {"$set": updates})
     fresh = await db.interventions.find_one({"id": intervention_id}, {"_id": 0})
     return fresh
+
+
+@api_router.post("/interventions/{intervention_id}/accept")
+async def accept_intervention(intervention_id: str, user=Depends(get_current_user)):
+    """Mark intervention as ACCEPTED by client (user manually confirms after receiving reply email)."""
+    result = await db.interventions.update_one(
+        {"id": intervention_id, "user_id": user["user_id"]},
+        {"$set": {"status": "accepted", "accepted_at": datetime.now(timezone.utc).isoformat()}},
+    )
+    if result.matched_count == 0:
+        raise HTTPException(404, "Intervento non trovato")
+    return {"ok": True}
 
 
 @api_router.post("/interventions/{intervention_id}/confirm")
