@@ -56,6 +56,10 @@ Consulente italiano - uso personale singolo (enrluc@gmail.com).
 - [x] MongoDB Community 7.0.14 portable scaricato dal workflow
 - [x] `.github/workflows/build-desktop-windows.yml` — CI Windows on workflow_dispatch + tag v*
 - [x] `DESKTOP_BUILD.md` — guida completa
+- [x] 2026-02 Fix CI: bump action versions (checkout@v5, setup-node@v5, setup-python@v6, upload-artifact@v5)
+- [x] 2026-02 Fix CI: filtro jq/dev-tools da requirements-desktop.txt su Windows
+- [x] 2026-02 Fix CI: NODE_OPTIONS=--openssl-legacy-provider per CRA 5 su Node 20
+- [x] 2026-02 Fix CI: npm install per electron (postinstall electron-builder rimosso)
 
 ### 🔧 Impostazioni Personali (2026-02)
 - [x] `GET/PUT /api/settings/api-keys` - Anthropic + Resend + from-email (masked read)

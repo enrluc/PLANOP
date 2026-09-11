@@ -29,8 +29,7 @@ _bundled = [
     'bcrypt',
     'passlib',
     'pypdf',
-    'pandas',
-    'numpy',
+    'anthropic',
 ]
 for pkg in _bundled:
     d, b, h = collect_all(pkg)

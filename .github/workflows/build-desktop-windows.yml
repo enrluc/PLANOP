@@ -28,7 +28,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '22'
+          node-version: '20'
 
       - name: Install frontend deps
         working-directory: frontend
@@ -41,6 +41,7 @@ jobs:
           REACT_APP_LOCAL_MODE: 'true'
           GENERATE_SOURCEMAP: 'false'
           CI: 'false'
+          NODE_OPTIONS: '--openssl-legacy-provider'
         run: yarn build
 
       # -----------------------------------------------------------------
@@ -55,8 +56,13 @@ jobs:
         working-directory: backend
         shell: pwsh
         run: |
+          # Filter runtime-only deps: skip dev tools and packages without Windows wheels
+          $skip = 'jq|boto3|pytest|black|isort|flake8|mypy|requests-oauthlib|python-jose|cryptography|typer'
+          Get-Content requirements.txt | Where-Object { $_ -notmatch $skip } | Set-Content requirements-desktop.txt
+          Write-Host "=== requirements-desktop.txt ==="
+          Get-Content requirements-desktop.txt
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements-desktop.txt
           pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ emergentintegrations
           pip install pyinstaller==6.10.0
 
@@ -82,7 +88,7 @@ jobs:
       # -----------------------------------------------------------------
       - name: Install electron deps
         working-directory: electron
-        run: yarn install --frozen-lockfile || npm install
+        run: npm install --no-audit --no-fund
 
       - name: Electron builder (Windows NSIS installer)
         working-directory: electron
