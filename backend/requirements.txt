@@ -30,3 +30,4 @@ httpx==0.28.1
 reportlab==5.0.1
 pypdf==6.18.0
 openpyxl==3.1.5
+anthropic==0.40.0

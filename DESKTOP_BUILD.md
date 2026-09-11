@@ -143,3 +143,20 @@ In modalità desktop **non usi più** l'`EMERGENT_LLM_KEY` cloud. Puoi impostare
 Costi indicativi uso personale:
 - **Anthropic Claude Haiku 4.5**: ~$0,50 - $2/mese (200-500 PDF)
 - **Resend**: gratuito fino a 3.000 email/mese
+
+## 📥 Webhook Auto-Accept (opzionale)
+
+L'app espone `POST /api/webhooks/email-reply` che accetta le risposte email dei clienti e marca l'intervento come **Accettato** quando il corpo contiene parole tipo *"ok", "confermo", "va bene"* (e non contiene parole di rifiuto come *"annulla", "sposta"*).
+
+Per attivarlo:
+
+1. Su [Resend → Inbound](https://resend.com/inbound-emails) configura un indirizzo (es. `risposte@tuodominio.it`) che inoltri via webhook a:
+   `https://<il-tuo-dominio-o-tunnel>/api/webhooks/email-reply`
+2. In `backend/.env` (o via variabile env in modalità desktop) imposta:
+   ```
+   WEBHOOK_INBOUND_SECRET=<un-token-lungo-casuale>
+   ```
+3. Su Resend passa il token come header `Authorization: Bearer <token>` o query `?token=<token>`.
+4. Assicurati che l'email del cliente in anagrafica combaci con l'indirizzo del mittente.
+
+In modalità **desktop** questo webhook non serve — puoi comunque chiamarlo manualmente da uno script/cron se hai un modo per parseggiare l'inbox.

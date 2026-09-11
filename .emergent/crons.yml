@@ -20,3 +20,10 @@ crons:
     endpoint: "{{BASE_URL}}/api/cron/monthly-agenda"
     method: POST
     enabled: true
+  - name: weekly-backup
+    description: "Ogni domenica alle 22:00 invia via email il backup ZIP di clienti, contratti e interventi"
+    cron: "0 22 * * 0"
+    timezone: "Europe/Rome"
+    endpoint: "{{BASE_URL}}/api/cron/weekly-backup"
+    method: POST
+    enabled: true

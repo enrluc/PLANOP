@@ -68,6 +68,9 @@ export const monthlyAgendaUrl = (yearMonth) => `${API}/reports/monthly-agenda.xl
 
 export const getIssuer = () => api.get("/settings/issuer").then(r => r.data);
 export const setIssuer = (data) => api.put("/settings/issuer", data).then(r => r.data);
+export const getApiKeys = () => api.get("/settings/api-keys").then(r => r.data);
+export const setApiKeys = (data) => api.put("/settings/api-keys", data).then(r => r.data);
+export const weeklyBackupUrl = () => `${API}/reports/weekly-backup.zip`;
 export const exportClientsCsvUrl = () => `${API}/export/invoicex/clients.csv`;
 export const clientsTemplateCsvUrl = () => `${API}/import/clients-template.csv`;
 export const contractsTemplateCsvUrl = () => `${API}/import/contracts-template.csv`;

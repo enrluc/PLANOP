@@ -3,6 +3,7 @@ import {
   getReminderPrefs, setReminderPrefs, testReminder, getReminderLog,
   getGcalSettings, setGcalSettings, gcalSyncNow,
   getIssuer, setIssuer,
+  getApiKeys, setApiKeys, weeklyBackupUrl,
 } from "../lib/api";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -10,7 +11,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Switch } from "../components/ui/switch";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "../components/ui/select";
-import { Bell, Send, Loader2, CheckCircle2, CalendarSync, RefreshCw, FileSpreadsheet } from "lucide-react";
+import { Bell, Send, Loader2, CheckCircle2, CalendarSync, RefreshCw, FileSpreadsheet, KeyRound, Archive, Eye, EyeOff, Trash2, Download } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Settings() {
@@ -28,12 +29,21 @@ export default function Settings() {
     telefono: "", email: "", id_paese_trasmittente: "IT", id_codice_trasmittente: "",
   });
   const [issuerSaving, setIssuerSaving] = useState(false);
+  const [apiKeys, setApiKeysState] = useState({ anthropic_api_key: "", resend_api_key: "", resend_from_email: "", has_anthropic: false, has_resend: false });
+  const [apiKeysDraft, setApiKeysDraft] = useState({ anthropic_api_key: "", resend_api_key: "", resend_from_email: "" });
+  const [apiKeysSaving, setApiKeysSaving] = useState(false);
+  const [showAnthropic, setShowAnthropic] = useState(false);
+  const [showResend, setShowResend] = useState(false);
 
   useEffect(() => {
     getReminderPrefs().then(setPrefs).catch(() => {});
     getReminderLog().then(setLog).catch(() => {});
     getGcalSettings().then(setGcal).catch(() => {});
     getIssuer().then(setIssuerState).catch(() => {});
+    getApiKeys().then((d) => {
+      setApiKeysState(d);
+      setApiKeysDraft({ anthropic_api_key: "", resend_api_key: "", resend_from_email: d.resend_from_email || "" });
+    }).catch(() => {});
   }, []);
 
   const save = async () => {
@@ -76,6 +86,35 @@ export default function Settings() {
     try { await setIssuer(issuer); toast.success("Dati emittente salvati"); }
     catch (_e) { toast.error("Errore salvataggio"); }
     finally { setIssuerSaving(false); }
+  };
+
+  const saveApiKeys = async () => {
+    setApiKeysSaving(true);
+    try {
+      const payload = {
+        anthropic_api_key: apiKeysDraft.anthropic_api_key || "",
+        resend_api_key: apiKeysDraft.resend_api_key || "",
+        resend_from_email: apiKeysDraft.resend_from_email || "",
+      };
+      const r = await setApiKeys(payload);
+      toast.success("Chiavi API salvate");
+      const fresh = await getApiKeys();
+      setApiKeysState(fresh);
+      setApiKeysDraft({ anthropic_api_key: "", resend_api_key: "", resend_from_email: fresh.resend_from_email || "" });
+    } catch (_e) { toast.error("Errore salvataggio chiavi"); }
+    finally { setApiKeysSaving(false); }
+  };
+
+  const clearOneKey = async (which) => {
+    try {
+      const payload = { anthropic_api_key: "", resend_api_key: "", resend_from_email: apiKeys.resend_from_email || "" };
+      payload[which] = "__clear__";
+      await setApiKeys(payload);
+      toast.success("Chiave rimossa");
+      const fresh = await getApiKeys();
+      setApiKeysState(fresh);
+      setApiKeysDraft({ anthropic_api_key: "", resend_api_key: "", resend_from_email: fresh.resend_from_email || "" });
+    } catch (_e) { toast.error("Errore"); }
   };
 
   return (
@@ -241,6 +280,102 @@ export default function Settings() {
             Salva dati emittente
           </Button>
         </div>
+      </Card>
+
+      <Card className="p-6 border-slate-200 bg-white mb-6">
+        <div className="flex items-center gap-2 mb-4">
+          <KeyRound className="w-5 h-5 text-blue-700" />
+          <h2 className="font-bold font-display text-lg text-slate-900">Chiavi API personali (Desktop / Self-hosted)</h2>
+        </div>
+        <p className="text-sm text-slate-600 mb-4 leading-relaxed">
+          Nella build desktop di PlanOp puoi inserire qui le <b>tue</b> chiavi Anthropic e Resend. Se impostate, l'app le usa al posto della chiave Emergent condivisa. Lascia il campo vuoto per non modificare quello già salvato. Costo indicativo mensile: Anthropic ~$0,50-2, Resend gratis fino a 3000 email/mese.
+        </p>
+        <div className="space-y-4">
+          <div>
+            <Label>Chiave Anthropic (Claude Haiku 4.5)</Label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Input
+                  data-testid="anthropic-key-input"
+                  type={showAnthropic ? "text" : "password"}
+                  value={apiKeysDraft.anthropic_api_key}
+                  onChange={(e) => setApiKeysDraft({ ...apiKeysDraft, anthropic_api_key: e.target.value })}
+                  placeholder={apiKeys.has_anthropic ? apiKeys.anthropic_api_key : "sk-ant-…"}
+                  className="font-mono text-xs pr-10"
+                />
+                <button type="button" onClick={() => setShowAnthropic((v) => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-900" data-testid="anthropic-key-toggle">
+                  {showAnthropic ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              {apiKeys.has_anthropic && (
+                <Button data-testid="anthropic-key-clear" variant="outline" onClick={() => clearOneKey("anthropic_api_key")} title="Rimuovi chiave Anthropic personale">
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              )}
+            </div>
+            <div className="text-xs text-slate-500 mt-1">
+              Ottienila su <a className="text-blue-700 underline" href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer">console.anthropic.com</a>.
+            </div>
+          </div>
+
+          <div>
+            <Label>Chiave Resend (email)</Label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Input
+                  data-testid="resend-key-input"
+                  type={showResend ? "text" : "password"}
+                  value={apiKeysDraft.resend_api_key}
+                  onChange={(e) => setApiKeysDraft({ ...apiKeysDraft, resend_api_key: e.target.value })}
+                  placeholder={apiKeys.has_resend ? apiKeys.resend_api_key : "re_…"}
+                  className="font-mono text-xs pr-10"
+                />
+                <button type="button" onClick={() => setShowResend((v) => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-900" data-testid="resend-key-toggle">
+                  {showResend ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              {apiKeys.has_resend && (
+                <Button data-testid="resend-key-clear" variant="outline" onClick={() => clearOneKey("resend_api_key")} title="Rimuovi chiave Resend personale">
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              )}
+            </div>
+            <div className="text-xs text-slate-500 mt-1">
+              Ottienila su <a className="text-blue-700 underline" href="https://resend.com/api-keys" target="_blank" rel="noreferrer">resend.com/api-keys</a>. Serve verificare il dominio del mittente qui sotto.
+            </div>
+          </div>
+
+          <div>
+            <Label>Indirizzo "mittente" per Resend (dominio verificato)</Label>
+            <Input
+              data-testid="resend-from-input"
+              value={apiKeysDraft.resend_from_email}
+              onChange={(e) => setApiKeysDraft({ ...apiKeysDraft, resend_from_email: e.target.value })}
+              placeholder="es. noreply@tuodominio.it — vuoto = usa onboarding@resend.dev"
+            />
+          </div>
+
+          <Button data-testid="api-keys-save" onClick={saveApiKeys} disabled={apiKeysSaving} className="bg-slate-900 hover:bg-slate-800 text-white">
+            {apiKeysSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
+            Salva chiavi
+          </Button>
+        </div>
+      </Card>
+
+      <Card className="p-6 border-slate-200 bg-white mb-6">
+        <div className="flex items-center gap-2 mb-4">
+          <Archive className="w-5 h-5 text-blue-700" />
+          <h2 className="font-bold font-display text-lg text-slate-900">Backup automatico</h2>
+        </div>
+        <p className="text-sm text-slate-600 mb-4 leading-relaxed">
+          Ogni <b>domenica alle 22:00</b> ricevi via email uno zip con <code>clients.csv</code>, <code>contracts.csv</code>, <code>interventions.csv</code>. Conservalo in un posto sicuro: se un giorno perdi accesso all'app, puoi reimportare tutto in un istante.
+        </p>
+        <a href={weeklyBackupUrl()} target="_blank" rel="noreferrer">
+          <Button data-testid="weekly-backup-download" variant="outline">
+            <Download className="w-4 h-4 mr-2" />
+            Scarica backup adesso
+          </Button>
+        </a>
       </Card>
 
       <Card className="p-6 border-slate-200 bg-white">

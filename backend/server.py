@@ -746,6 +746,7 @@ async def confirm_intervention(intervention_id: str, user=Depends(get_current_us
                 to=client["email"],
                 subject=f"Conferma intervento {iv['date']} - {contract.get('title','')[:50]}",
                 html=html,
+                user_id=user["user_id"],
             )
         except HTTPException as e:
             warning = f"Email non inviata: {e.detail}"
@@ -1089,7 +1090,42 @@ EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
 
-def _make_chat(session_id: str, system: str) -> LlmChat:
+class _DirectAnthropicChat:
+    """Drop-in replacement for LlmChat used when a personal Anthropic key is set."""
+    def __init__(self, api_key: str, system: str, model: str):
+        import anthropic as _anth
+        self._client = _anth.AsyncAnthropic(api_key=api_key)
+        self._model = model
+        self._system = system
+        self._history = []
+
+    async def send_message(self, msg):
+        self._history.append({"role": "user", "content": msg.text})
+        resp = await self._client.messages.create(
+            model=self._model, system=self._system,
+            max_tokens=2048, messages=self._history,
+        )
+        text = resp.content[0].text if resp.content else ""
+        self._history.append({"role": "assistant", "content": text})
+        return text
+
+
+async def _get_personal_keys(user_id: str) -> dict:
+    """Fetch the user's personal API keys (Anthropic / Resend) from DB."""
+    doc = await db.api_keys.find_one({"user_id": user_id}, {"_id": 0})
+    if not doc:
+        return {"anthropic": "", "resend": "", "resend_from": ""}
+    return {
+        "anthropic": (doc.get("anthropic_api_key") or "").strip(),
+        "resend": (doc.get("resend_api_key") or "").strip(),
+        "resend_from": (doc.get("resend_from_email") or "").strip(),
+    }
+
+
+def _make_chat(session_id: str, system: str, anthropic_key: str = ""):
+    """Uses personal Anthropic key when provided, else falls back to Emergent LLM key."""
+    if anthropic_key:
+        return _DirectAnthropicChat(anthropic_key, system, CLAUDE_MODEL)
     return LlmChat(
         api_key=EMERGENT_LLM_KEY,
         session_id=session_id,
@@ -1154,7 +1190,8 @@ async def _analyze_text(text: str, user):
         "\"notes\": string (riassunto breve)}. "
         "Se un campo non è presente nel testo, usa stringa vuota o 0. NON aggiungere testo fuori dal JSON."
     )
-    chat = _make_chat(f"analyze-{user['user_id']}-{uuid.uuid4().hex[:6]}", sys_msg)
+    _pk = await _get_personal_keys(user["user_id"])
+    chat = _make_chat(f"analyze-{user['user_id']}-{uuid.uuid4().hex[:6]}", sys_msg, _pk["anthropic"])
     resp = await chat.send_message(UserMessage(text=f"Analizza il seguente contratto ed estrai i dati:\n\n{text}"))
     raw = resp if isinstance(resp, str) else str(resp)
     # Strip code fences if present
@@ -1219,7 +1256,8 @@ async def planning_chat(payload: ChatIn, user=Depends(get_current_user)):
         "role": "user", "content": payload.message,
         "created_at": datetime.now(timezone.utc).isoformat(),
     })
-    chat = _make_chat(history_key, sys_msg)
+    _pk = await _get_personal_keys(user["user_id"])
+    chat = _make_chat(history_key, sys_msg, _pk["anthropic"])
     resp = await chat.send_message(UserMessage(text=payload.message))
     reply = resp if isinstance(resp, str) else str(resp)
     await db.ai_messages.insert_one({
@@ -1269,7 +1307,8 @@ async def ai_draft(payload: DraftIn, user=Depends(get_current_user)):
         sys_msg = "Sei un assistente italiano che scrive brevi note operative interne di 3-6 righe."
 
     prompt = f"Contesto: {_json.dumps(ctx, ensure_ascii=False)}\n\nIstruzioni aggiuntive: {payload.extra_prompt or 'nessuna'}"
-    chat = _make_chat(f"draft-{user['user_id']}-{uuid.uuid4().hex[:6]}", sys_msg)
+    _pk = await _get_personal_keys(user["user_id"])
+    chat = _make_chat(f"draft-{user['user_id']}-{uuid.uuid4().hex[:6]}", sys_msg, _pk["anthropic"])
     resp = await chat.send_message(UserMessage(text=prompt))
     return {"draft": resp if isinstance(resp, str) else str(resp), "model": CLAUDE_MODEL}
 
@@ -1356,18 +1395,44 @@ def _assert_safe_email(subject: str, html: str) -> None:
                 raise ValueError(f"Anchor text {m.group(1)!r} != real link host {real!r} (G3)")
 
 
-async def send_email(*, to: str, subject: str, html: str) -> Optional[str]:
+async def send_email(*, to: str, subject: str, html: str, user_id: Optional[str] = None) -> Optional[str]:
     _assert_safe_email(subject, html)
-    payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
-    if EMAIL_REPLY_TO:
-        payload["contact_email"] = EMAIL_REPLY_TO
+    # Prefer personal Resend key if the user has configured one in Settings.
+    personal_key = ""
+    personal_from = ""
+    if user_id:
+        try:
+            _k = await _get_personal_keys(user_id)
+            personal_key = _k.get("resend", "")
+            personal_from = _k.get("resend_from", "")
+        except Exception:
+            personal_key = ""
     try:
         async with httpx.AsyncClient(timeout=30) as hc:
-            resp = await hc.post(
-                f"{EMAIL_BASE_URL}/api/v1/email/send",
-                headers={"X-Email-Key": EMAIL_KEY},
-                json=payload,
-            )
+            if personal_key:
+                from_addr = personal_from or "onboarding@resend.dev"
+                r_payload = {
+                    "from": f"{EMAIL_FROM_NAME} <{from_addr}>",
+                    "to": [to],
+                    "subject": subject,
+                    "html": html,
+                }
+                if EMAIL_REPLY_TO:
+                    r_payload["reply_to"] = EMAIL_REPLY_TO
+                resp = await hc.post(
+                    "https://api.resend.com/emails",
+                    headers={"Authorization": f"Bearer {personal_key}"},
+                    json=r_payload,
+                )
+            else:
+                payload = {"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME}
+                if EMAIL_REPLY_TO:
+                    payload["contact_email"] = EMAIL_REPLY_TO
+                resp = await hc.post(
+                    f"{EMAIL_BASE_URL}/api/v1/email/send",
+                    headers={"X-Email-Key": EMAIL_KEY},
+                    json=payload,
+                )
         resp.raise_for_status()
         return resp.json().get("id")
     except httpx.HTTPStatusError as e:
@@ -1438,7 +1503,7 @@ async def test_reminder(user=Depends(get_current_user)):
         contract_title="Contratto di test PlanOp",
         day_index=1, total_days=3, address="Via Roma 1, Milano",
     )
-    mid = await send_email(to=user["email"], subject="Promemoria intervento (test)", html=html)
+    mid = await send_email(to=user["email"], subject="Promemoria intervento (test)", html=html, user_id=user["user_id"])
     return {"ok": True, "email_id": mid}
 
 
@@ -1498,7 +1563,7 @@ async def _send_daily_reminders(run_id: str):
             address=f"{cli.get('address','')} {cli.get('city','')}".strip(),
         )
         try:
-            eid = await send_email(to=recipient, subject=f"Promemoria intervento di domani ({tomorrow})", html=html)
+            eid = await send_email(to=recipient, subject=f"Promemoria intervento di domani ({tomorrow})", html=html, user_id=iv["user_id"])
             await db.reminder_log.insert_one({
                 "intervention_id": iv["id"],
                 "user_id": iv["user_id"],
@@ -1578,6 +1643,67 @@ async def set_issuer(payload: IssuerSettingsIn, user=Depends(get_current_user)):
         {"user_id": user["user_id"]}, {"$set": data}, upsert=True,
     )
     return {"ok": True}
+
+
+# =============== PERSONAL API KEYS (desktop / self-hosted) ===============
+
+class ApiKeysIn(BaseModel):
+    anthropic_api_key: Optional[str] = ""
+    resend_api_key: Optional[str] = ""
+    resend_from_email: Optional[str] = ""
+
+
+def _mask_key(k: str) -> str:
+    if not k:
+        return ""
+    if len(k) < 10:
+        return "•" * len(k)
+    return k[:6] + "•" * (len(k) - 10) + k[-4:]
+
+
+@api_router.get("/settings/api-keys")
+async def get_api_keys(user=Depends(get_current_user)):
+    doc = await db.api_keys.find_one({"user_id": user["user_id"]}, {"_id": 0})
+    if not doc:
+        return {"anthropic_api_key": "", "resend_api_key": "", "resend_from_email": "",
+                "has_anthropic": False, "has_resend": False}
+    return {
+        "anthropic_api_key": _mask_key(doc.get("anthropic_api_key", "")),
+        "resend_api_key": _mask_key(doc.get("resend_api_key", "")),
+        "resend_from_email": doc.get("resend_from_email", ""),
+        "has_anthropic": bool(doc.get("anthropic_api_key")),
+        "has_resend": bool(doc.get("resend_api_key")),
+    }
+
+
+@api_router.put("/settings/api-keys")
+async def set_api_keys(payload: ApiKeysIn, user=Depends(get_current_user)):
+    """Save personal API keys. Empty string = keep existing. Sentinel '__clear__' = remove."""
+    existing = await db.api_keys.find_one({"user_id": user["user_id"]}, {"_id": 0}) or {}
+    def _resolve(new_val, current_val):
+        if new_val is None:
+            return current_val
+        if new_val == "__clear__":
+            return ""
+        if new_val == "" or new_val.startswith("•") or "•" in new_val:
+            return current_val  # unchanged: user didn't retype the masked value
+        return new_val.strip()
+
+    data = {
+        "user_id": user["user_id"],
+        "anthropic_api_key": _resolve(payload.anthropic_api_key, existing.get("anthropic_api_key", "")),
+        "resend_api_key": _resolve(payload.resend_api_key, existing.get("resend_api_key", "")),
+        "resend_from_email": (payload.resend_from_email or existing.get("resend_from_email", "") or "").strip(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.api_keys.update_one(
+        {"user_id": user["user_id"]}, {"$set": data}, upsert=True,
+    )
+    return {
+        "ok": True,
+        "has_anthropic": bool(data["anthropic_api_key"]),
+        "has_resend": bool(data["resend_api_key"]),
+    }
 
 
 # =============== INVOICEX EXPORT ===============
@@ -2469,6 +2595,193 @@ async def cron_monthly_agenda(request: Request, payload: ReminderCronIn, backgro
 
     background_tasks.add_task(_send_all)
     return {"ok": True, "run_id": run_id}
+
+
+# =============== WEBHOOK: INBOUND EMAIL AUTO-ACCEPT ===============
+
+WEBHOOK_INBOUND_SECRET = os.environ.get("WEBHOOK_INBOUND_SECRET", "")
+
+_ACCEPT_KEYWORDS = (
+    "ok", "va bene", "confermo", "confermato", "confermata", "accetto",
+    "accettato", "perfetto", "d'accordo", "ci sono", "confirm", "confirmed",
+    "yes", "approvato", "conferma",
+)
+_REJECT_KEYWORDS = (
+    "no ", "non posso", "non riesco", "annulla", "annullare", "sposta",
+    "spostare", "rimanda", "impegnato", "impegnata", "declino", "rifiuto",
+)
+
+
+class InboundEmailIn(BaseModel):
+    from_email: Optional[str] = None
+    sender: Optional[str] = None   # alternative name from Resend webhook
+    subject: Optional[str] = ""
+    text: Optional[str] = ""       # plain text body
+    html: Optional[str] = ""       # HTML body (fallback)
+
+
+def _extract_email(raw: str) -> str:
+    if not raw:
+        return ""
+    m = re.search(r"<([^>]+)>", raw)
+    return (m.group(1) if m else raw).strip().lower()
+
+
+@api_router.post("/webhooks/email-reply")
+async def webhook_email_reply(payload: InboundEmailIn, request: Request):
+    """Receive inbound email replies (from Resend inbound webhook or manual POST)
+    and auto-mark the matching intervention as ACCEPTED when the body says yes."""
+    if WEBHOOK_INBOUND_SECRET:
+        token = request.headers.get("Authorization", "")
+        token = token[7:] if token.startswith("Bearer ") else token
+        query_token = request.query_params.get("token", "")
+        if not _secrets.compare_digest(token or query_token, WEBHOOK_INBOUND_SECRET):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+    raw_from = payload.from_email or payload.sender or ""
+    from_addr = _extract_email(raw_from)
+    if not from_addr:
+        raise HTTPException(400, "Mittente mancante")
+
+    body = (payload.text or payload.html or "").lower()
+    if not body:
+        return {"ok": False, "reason": "empty body"}
+
+    # Reject wins over accept if present
+    if any(k in body for k in _REJECT_KEYWORDS):
+        await db.inbound_email_log.insert_one({
+            "from": from_addr, "subject": payload.subject or "",
+            "action": "reject_signal", "received_at": datetime.now(timezone.utc).isoformat(),
+        })
+        return {"ok": True, "action": "no_action", "reason": "reject keywords"}
+
+    if not any(re.search(rf"\b{re.escape(k)}\b", body) for k in _ACCEPT_KEYWORDS):
+        return {"ok": True, "action": "no_action", "reason": "no accept keywords"}
+
+    # Find the client by email (case insensitive)
+    client = await db.clients.find_one({"email": {"$regex": f"^{re.escape(from_addr)}$", "$options": "i"}}, {"_id": 0})
+    if not client:
+        return {"ok": False, "reason": "client email not found"}
+
+    # Find the most recent confirmed intervention (not yet accepted) for this client
+    iv = await db.interventions.find_one(
+        {"client_id": client["id"], "status": "confirmed"},
+        {"_id": 0}, sort=[("confirmed_at", -1)],
+    )
+    if not iv:
+        return {"ok": False, "reason": "no confirmed intervention pending"}
+
+    await db.interventions.update_one(
+        {"id": iv["id"]},
+        {"$set": {"status": "accepted", "accepted_at": datetime.now(timezone.utc).isoformat(),
+                  "accepted_via": "email_reply"}},
+    )
+    await db.inbound_email_log.insert_one({
+        "from": from_addr, "subject": payload.subject or "",
+        "intervention_id": iv["id"], "client_id": client["id"],
+        "action": "accepted", "received_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"ok": True, "action": "accepted", "intervention_id": iv["id"]}
+
+
+# =============== CRON: WEEKLY BACKUP (Sunday 22:00 Europe/Rome) ===============
+
+def _rows_to_csv(rows: list, headers: list) -> bytes:
+    out = [",".join(headers)]
+    for r in rows:
+        out.append(",".join(_csv_escape(r.get(h)) for h in headers))
+    return ("\n".join(out) + "\n").encode("utf-8-sig")
+
+
+async def _build_weekly_backup(user_id: str) -> tuple[bytes, int, int, int]:
+    import zipfile
+    clients = await db.clients.find({"user_id": user_id}, {"_id": 0}).to_list(5000)
+    contracts = await db.contracts.find({"user_id": user_id}, {"_id": 0}).to_list(5000)
+    ivs = await db.interventions.find({"user_id": user_id}, {"_id": 0}).to_list(20000)
+
+    client_headers = ["id", "codice_cliente", "name", "address", "city", "cap", "provincia",
+                      "piva", "codice_fiscale", "codice_destinatario", "pec",
+                      "phone", "email", "contact_name", "lat", "lng", "created_at"]
+    contract_headers = ["id", "client_id", "numero_preventivo", "title", "total_days",
+                        "daily_rate", "max_days_per_client_block", "start_date", "deadline",
+                        "priority", "status", "created_at"]
+    iv_headers = ["id", "contract_id", "client_id", "date", "slot", "day_index",
+                  "status", "confirmed_at", "accepted_at", "notes"]
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("clients.csv", _rows_to_csv(clients, client_headers))
+        z.writestr("contracts.csv", _rows_to_csv(contracts, contract_headers))
+        z.writestr("interventions.csv", _rows_to_csv(ivs, iv_headers))
+    return buf.getvalue(), len(clients), len(contracts), len(ivs)
+
+
+@api_router.post("/cron/weekly-backup")
+async def cron_weekly_backup(request: Request, payload: ReminderCronIn, background_tasks: BackgroundTasks):
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    if not WEBHOOK_CRON_SECRET or not _secrets.compare_digest(token, WEBHOOK_CRON_SECRET):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    run_id = request.headers.get("X-Webhook-Id") or (payload.run_id or uuid.uuid4().hex)
+    existing = await db.cron_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if existing:
+        return {"ok": True, "duplicate": True}
+    await db.cron_runs.insert_one({
+        "run_id": run_id,
+        "schedule_id": payload.schedule_id or "weekly-backup",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    async def _send_all():
+        users = await db.users.find({}, {"_id": 0, "user_id": 1, "email": 1, "name": 1}).to_list(1000)
+        today = date.today().isoformat()
+        for u in users:
+            try:
+                data, nc, nk, ni = await _build_weekly_backup(u["user_id"])
+                if (nc + nk + ni) == 0 or not u.get("email"):
+                    continue
+                import base64 as _b64
+                html_body = (
+                    f"<p>Ciao {escape(u.get('name','') or '')},</p>"
+                    f"<p>in allegato il backup settimanale dei tuoi dati PlanOp al {today}:</p>"
+                    f"<ul>"
+                    f"<li><strong>{nc}</strong> clienti</li>"
+                    f"<li><strong>{nk}</strong> contratti</li>"
+                    f"<li><strong>{ni}</strong> interventi</li>"
+                    f"</ul>"
+                    f"<p>Conserva questo file in un posto sicuro. Se un giorno perdi accesso all'app, puoi reimportare tutto in un istante.</p>"
+                    f"<p>Buona domenica,<br>PlanOp</p>"
+                )
+                payload_mail = {
+                    "to": [u["email"]],
+                    "subject": f"Backup PlanOp del {today}",
+                    "html": html_body,
+                    "from_name": EMAIL_FROM_NAME,
+                    "attachments": [{
+                        "filename": f"planop-backup-{today}.zip",
+                        "content": _b64.b64encode(data).decode(),
+                    }],
+                }
+                async with httpx.AsyncClient(timeout=30) as hc:
+                    await hc.post(f"{EMAIL_BASE_URL}/api/v1/email/send",
+                                  headers={"X-Email-Key": EMAIL_KEY}, json=payload_mail)
+            except Exception as e:
+                logger.error(f"weekly-backup for {u.get('email')}: {e}")
+
+    background_tasks.add_task(_send_all)
+    return {"ok": True, "run_id": run_id}
+
+
+@api_router.get("/reports/weekly-backup.zip")
+async def download_weekly_backup(user=Depends(get_current_user)):
+    """On-demand download of the same weekly backup (manual button)."""
+    data, nc, nk, ni = await _build_weekly_backup(user["user_id"])
+    today = date.today().isoformat()
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="planop-backup-{today}.zip"'},
+    )
 
 
 app.include_router(api_router)
