@@ -1,0 +1,66 @@
+{
+  "name": "planop-desktop",
+  "productName": "PlanOp",
+  "version": "1.0.0",
+  "description": "PlanOp — Desktop edition (single-user, offline-friendly).",
+  "main": "main.js",
+  "author": "PlanOp",
+  "license": "UNLICENSED",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "build:win": "electron-builder --win --x64",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "devDependencies": {
+    "electron": "31.3.1",
+    "electron-builder": "24.13.3"
+  },
+  "dependencies": {
+    "electron-log": "5.1.7",
+    "wait-on": "7.2.0"
+  },
+  "build": {
+    "appId": "com.planop.desktop",
+    "productName": "PlanOp",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/build",
+        "to": "frontend"
+      },
+      {
+        "from": "../backend/dist/planop-backend",
+        "to": "backend"
+      },
+      {
+        "from": "vendor/mongo",
+        "to": "mongo"
+      }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "artifactName": "PlanOp-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "PlanOp"
+    }
+  }
+}

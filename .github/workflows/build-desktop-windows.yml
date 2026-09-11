@@ -1,0 +1,108 @@
+name: Build PlanOp Desktop (Windows)
+
+# Manuale, e su tag "vX.Y.Z" per una release ufficiale.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    name: Build Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    env:
+      # Bundled MongoDB Community (portable ZIP).
+      MONGO_VERSION: '7.0.14'
+      MONGO_URL: 'https://fastdl.mongodb.org/windows/mongodb-windows-x86_64-7.0.14.zip'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # -----------------------------------------------------------------
+      # 1) Frontend build (React CRA) — desktop flavour
+      # -----------------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: yarn install --frozen-lockfile
+
+      - name: Build frontend (desktop flavour)
+        working-directory: frontend
+        env:
+          REACT_APP_BACKEND_URL: ''           # relative URLs → backend served by same origin
+          REACT_APP_LOCAL_MODE: 'true'
+          GENERATE_SOURCEMAP: 'false'
+          CI: 'false'
+        run: yarn build
+
+      # -----------------------------------------------------------------
+      # 2) Backend build (PyInstaller onedir)
+      # -----------------------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend deps
+        working-directory: backend
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ emergentintegrations
+          pip install pyinstaller==6.10.0
+
+      - name: PyInstaller build
+        working-directory: backend
+        shell: pwsh
+        run: pyinstaller planop_backend.spec --noconfirm --clean
+
+      # -----------------------------------------------------------------
+      # 3) Download MongoDB portable and stash into electron/vendor/mongo
+      # -----------------------------------------------------------------
+      - name: Download MongoDB Community (portable ZIP)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:MONGO_URL -OutFile mongo.zip
+          Expand-Archive -Path mongo.zip -DestinationPath mongo-extract -Force
+          $inner = Get-ChildItem mongo-extract | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path electron/vendor/mongo/bin | Out-Null
+          Copy-Item "$($inner.FullName)/bin/mongod.exe" electron/vendor/mongo/bin/ -Force
+
+      # -----------------------------------------------------------------
+      # 4) Electron build (installer .exe via NSIS)
+      # -----------------------------------------------------------------
+      - name: Install electron deps
+        working-directory: electron
+        run: yarn install --frozen-lockfile || npm install
+
+      - name: Electron builder (Windows NSIS installer)
+        working-directory: electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --win --x64 --publish never
+
+      # -----------------------------------------------------------------
+      # 5) Upload artifact (scaricabile dalla pagina Actions)
+      # -----------------------------------------------------------------
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PlanOp-Windows-Setup
+          path: electron/dist/*.exe
+          if-no-files-found: error
+
+      - name: Attach installer to Release (only on tag push)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: electron/dist/*.exe

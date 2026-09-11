@@ -41,10 +41,33 @@ api_router = APIRouter(prefix="/api")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# LOCAL_MODE: desktop/single-user mode (Electron build). Bypasses OAuth entirely.
+LOCAL_MODE = os.environ.get('LOCAL_MODE', '').lower() in ('1', 'true', 'yes')
+LOCAL_USER_ID = "local_user_001"
+LOCAL_USER_EMAIL = os.environ.get('LOCAL_USER_EMAIL', 'local@planop.desktop')
+LOCAL_USER_NAME = os.environ.get('LOCAL_USER_NAME', 'PlanOp Desktop')
+
 # =============== AUTH ===============
+
+async def _ensure_local_user():
+    existing = await db.users.find_one({"user_id": LOCAL_USER_ID}, {"_id": 0})
+    if existing:
+        return existing
+    doc = {
+        "user_id": LOCAL_USER_ID,
+        "email": LOCAL_USER_EMAIL,
+        "name": LOCAL_USER_NAME,
+        "picture": "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.users.insert_one(doc)
+    return doc
+
 
 async def get_current_user(request: Request):
     """REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH"""
+    if LOCAL_MODE:
+        return await _ensure_local_user()
     token = request.cookies.get("session_token")
     if not token:
         auth = request.headers.get("Authorization", "")
@@ -128,6 +151,8 @@ async def me(user=Depends(get_current_user)):
 
 @api_router.post("/auth/logout")
 async def logout(request: Request, response: Response):
+    if LOCAL_MODE:
+        return {"ok": True, "local_mode": True}
     token = request.cookies.get("session_token")
     if token:
         await db.user_sessions.delete_one({"session_token": token})
@@ -2455,6 +2480,41 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# =============== DESKTOP MODE: serve static frontend ===============
+# In LOCAL_MODE (Electron desktop build), the backend also serves the built React app
+# from ./static_frontend. Electron opens http://localhost:8001 and gets both.
+if LOCAL_MODE:
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
+
+    static_dir = Path(os.environ.get('STATIC_FRONTEND_DIR', str(ROOT_DIR / 'static_frontend')))
+    if static_dir.exists() and (static_dir / 'index.html').exists():
+        # Serve /static/* asset files from the CRA build
+        app.mount(
+            "/static",
+            StaticFiles(directory=str(static_dir / 'static')),
+            name="cra-static",
+        )
+
+        @app.get("/")
+        async def _index():
+            return FileResponse(str(static_dir / 'index.html'))
+
+        # SPA fallback: any non-/api route serves index.html so React Router works.
+        @app.get("/{full_path:path}")
+        async def _spa_fallback(full_path: str):
+            # Never intercept API routes
+            if full_path.startswith("api/"):
+                raise HTTPException(status_code=404)
+            candidate = static_dir / full_path
+            if candidate.is_file():
+                return FileResponse(str(candidate))
+            return FileResponse(str(static_dir / 'index.html'))
+
+        logger.info(f"LOCAL_MODE: serving frontend from {static_dir}")
+    else:
+        logger.warning(f"LOCAL_MODE enabled but static frontend not found at {static_dir}")
 
 
 @app.on_event("shutdown")

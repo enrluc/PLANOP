@@ -3,7 +3,7 @@ import {
   listInterventions, listContracts, listClients, getSubscribeUrl,
   listManualEvents, createManualEvent, deleteManualEvent, reschedulePlan,
   confirmIntervention, unconfirmIntervention, updateIntervention, acceptIntervention,
-  gcalSyncNow,
+  gcalSyncNow, monthlyAgendaUrl,
 } from "../lib/api";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -18,7 +18,7 @@ import {
 } from "../components/ui/dialog";
 import {
   Download, ChevronLeft, ChevronRight, ExternalLink, Plus, Trash2, RefreshCw,
-  CheckCircle2, Mail, MapPin, Phone, User, Clock, Star,
+  CheckCircle2, Mail, MapPin, Phone, User, Clock, Star, FileSpreadsheet,
 } from "lucide-react";
 import { toast } from "sonner";
 
