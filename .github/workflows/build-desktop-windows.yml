@@ -20,15 +20,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # -----------------------------------------------------------------
       # 1) Frontend build (React CRA) — desktop flavour
       # -----------------------------------------------------------------
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install frontend deps
         working-directory: frontend
@@ -47,7 +47,7 @@ jobs:
       # 2) Backend build (PyInstaller onedir)
       # -----------------------------------------------------------------
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
@@ -95,7 +95,7 @@ jobs:
       # 5) Upload artifact (scaricabile dalla pagina Actions)
       # -----------------------------------------------------------------
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: PlanOp-Windows-Setup
           path: electron/dist/*.exe
