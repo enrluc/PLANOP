@@ -60,6 +60,10 @@ Consulente italiano - uso personale singolo (enrluc@gmail.com).
 - [x] 2026-02 Fix CI: filtro jq/dev-tools da requirements-desktop.txt su Windows
 - [x] 2026-02 Fix CI: NODE_OPTIONS=--openssl-legacy-provider per CRA 5 su Node 20
 - [x] 2026-02 Fix CI: npm install per electron (postinstall electron-builder rimosso)
+- [x] 2026-02 Fix CI: bump electron-builder 24→25 + publish generic + repository field (bugfix updateInfoBuilder)
+- [x] 2026-02 Fix runtime: hiddenimports espliciti motor/pymongo/anthropic + collect_submodules + verifica post-build motor.motor_asyncio nel bundle
+- [x] 2026-02 Rimossa esclusione `cryptography` (necessaria a pymongo/motor) + aggiunto dnspython per SRV resolution
+- [x] 2026-02 Bump version a 1.0.1
 
 ### 🔧 Impostazioni Personali (2026-02)
 - [x] `GET/PUT /api/settings/api-keys` - Anthropic + Resend + from-email (masked read)

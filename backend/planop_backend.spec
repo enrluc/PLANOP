@@ -7,7 +7,7 @@
 #
 # Output goes to backend/dist/planop-backend/  (extraResources of electron-builder).
 
-from PyInstaller.utils.hooks import collect_all, copy_metadata
+from PyInstaller.utils.hooks import collect_all, copy_metadata, collect_submodules
 
 datas = []
 binaries = []
@@ -22,6 +22,7 @@ _bundled = [
     'anyio',
     'sniffio',
     'httpx',
+    'httpcore',
     'openpyxl',
     'reportlab',
     'motor',
@@ -30,16 +31,59 @@ _bundled = [
     'passlib',
     'pypdf',
     'anthropic',
+    'dotenv',
+    'pydantic',
+    'pydantic_core',
+    'email_validator',
+    'dns',           # dnspython (pymongo SRV)
 ]
 for pkg in _bundled:
-    d, b, h = collect_all(pkg)
-    datas += d
-    binaries += b
-    hiddenimports += h
+    try:
+        d, b, h = collect_all(pkg)
+        datas += d
+        binaries += b
+        hiddenimports += h
+    except Exception as e:
+        print(f"[spec] collect_all({pkg!r}) failed: {e}")
     try:
         datas += copy_metadata(pkg)
     except Exception:
         pass
+
+# Motor / PyMongo: PyInstaller often misses async submodules -> declare them explicitly.
+hiddenimports += collect_submodules('motor')
+hiddenimports += collect_submodules('pymongo')
+hiddenimports += collect_submodules('anthropic')
+hiddenimports += collect_submodules('emergentintegrations')
+
+# Explicit belts-and-braces list for the imports server.py performs at module level.
+hiddenimports += [
+    'motor',
+    'motor.motor_asyncio',
+    'motor.core',
+    'pymongo',
+    'pymongo.asynchronous',
+    'pymongo.synchronous',
+    'pymongo.auth',
+    'pymongo.auth_aws',
+    'pymongo.srv_resolver',
+    'bson',
+    'bson.objectid',
+    'reportlab.lib.pagesizes',
+    'reportlab.lib.colors',
+    'reportlab.lib.units',
+    'reportlab.pdfgen.canvas',
+    'openpyxl',
+    'openpyxl.styles',
+    'pypdf',
+    'httpx',
+    'httpcore',
+    'anthropic',
+    'anthropic._client',
+    'emergentintegrations.llm.chat',
+    'email_validator',
+    'dotenv',
+]
 
 # uvicorn workers / loops / http parsers are picked lazily -> declare them explicitly
 hiddenimports += [
@@ -55,8 +99,10 @@ hiddenimports += [
     'uvicorn.protocols.websockets.auto',
     'uvicorn.lifespan',
     'uvicorn.lifespan.on',
-    'email_validator',
 ]
+
+# Deduplicate
+hiddenimports = sorted(set(hiddenimports))
 
 block_cipher = None
 

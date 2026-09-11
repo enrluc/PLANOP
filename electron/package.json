@@ -1,7 +1,7 @@
 {
   "name": "planop-desktop",
   "productName": "PlanOp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "PlanOp — Desktop edition (single-user, offline-friendly).",
   "main": "main.js",
   "author": "PlanOp",

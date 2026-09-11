@@ -57,19 +57,32 @@ jobs:
         shell: pwsh
         run: |
           # Filter runtime-only deps: skip dev tools and packages without Windows wheels
-          $skip = 'jq|boto3|pytest|black|isort|flake8|mypy|requests-oauthlib|python-jose|cryptography|typer'
+          $skip = 'jq|boto3|pytest|black|isort|flake8|mypy|requests-oauthlib|python-jose|typer'
           Get-Content requirements.txt | Where-Object { $_ -notmatch $skip } | Set-Content requirements-desktop.txt
           Write-Host "=== requirements-desktop.txt ==="
           Get-Content requirements-desktop.txt
           python -m pip install --upgrade pip
           pip install -r requirements-desktop.txt
           pip install --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ emergentintegrations
-          pip install pyinstaller==6.10.0
+          pip install "dnspython>=2.6" pyinstaller==6.10.0
+          Write-Host "=== installed key packages ==="
+          pip show motor pymongo fastapi anthropic 2>&1 | Select-String "Name|Version"
 
       - name: PyInstaller build
         working-directory: backend
         shell: pwsh
-        run: pyinstaller planop_backend.spec --noconfirm --clean
+        run: |
+          pyinstaller planop_backend.spec --noconfirm --clean
+          Write-Host "=== Verify motor is bundled ==="
+          if (Test-Path "dist/planop-backend/_internal/motor/motor_asyncio.py") {
+            Write-Host "OK: motor found in bundle"
+          } elseif (Test-Path "dist/planop-backend/motor/motor_asyncio.py") {
+            Write-Host "OK: motor found in bundle (legacy layout)"
+          } else {
+            Write-Host "!! motor NOT bundled -- listing dist:"
+            Get-ChildItem -Recurse dist/planop-backend | Where-Object { $_.Name -like "*motor*" -or $_.Name -like "*asyncio*" } | Select-Object FullName
+            exit 1
+          }
 
       # -----------------------------------------------------------------
       # 3) Download MongoDB portable and stash into electron/vendor/mongo
