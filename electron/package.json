@@ -22,6 +22,7 @@
   "build": {
     "appId": "com.planop.desktop",
     "productName": "PlanOp",
+    "publish": null,
     "directories": {
       "output": "dist",
       "buildResources": "build-resources"

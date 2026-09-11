@@ -95,7 +95,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npx electron-builder --win --x64 --publish never
+        run: npx electron-builder --win --x64 -c.publish=null
 
       # -----------------------------------------------------------------
       # 5) Upload artifact (scaricabile dalla pagina Actions)
