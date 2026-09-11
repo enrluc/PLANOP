@@ -5,7 +5,6 @@ crons:
     timezone: "Europe/Rome"
     endpoint: "{{BASE_URL}}/api/cron/reminders"
     method: POST
-    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
     enabled: true
   - name: gcal-sync-daily
     description: "Sincronizza gli appuntamenti da Google Calendar iCal per bloccare le date"
@@ -13,5 +12,11 @@ crons:
     timezone: "Europe/Rome"
     endpoint: "{{BASE_URL}}/api/cron/gcal-sync"
     method: POST
-    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true
+  - name: monthly-agenda
+    description: "Il 1 del mese invia via email l'agenda Excel del mese precedente con km percorsi"
+    cron: "0 7 1 * *"
+    timezone: "Europe/Rome"
+    endpoint: "{{BASE_URL}}/api/cron/monthly-agenda"
+    method: POST
     enabled: true

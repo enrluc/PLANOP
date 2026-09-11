@@ -193,6 +193,17 @@ export default function CalendarPage() {
           <Button data-testid="sync-gcal-now-button" variant="outline" onClick={syncGcal} disabled={syncingGcal}>
             <RefreshCw className={`w-4 h-4 mr-2 ${syncingGcal ? "animate-spin" : ""}`} /> Sync Google Cal
           </Button>
+          <Button
+            data-testid="monthly-agenda-button"
+            variant="outline"
+            onClick={() => {
+              const y = monthDate.getFullYear();
+              const m = String(monthDate.getMonth() + 1).padStart(2, "0");
+              window.open(monthlyAgendaUrl(`${y}-${m}`), "_blank");
+            }}
+          >
+            <FileSpreadsheet className="w-4 h-4 mr-2" /> Agenda Excel
+          </Button>
           <Button data-testid="reschedule-all-button" variant="outline" onClick={reschedule} disabled={rescheduling}>
             <RefreshCw className={`w-4 h-4 mr-2 ${rescheduling ? "animate-spin" : ""}`} /> Riprogramma tutto
           </Button>

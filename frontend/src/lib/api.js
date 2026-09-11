@@ -64,6 +64,7 @@ export const getReminderLog = () => api.get("/reminders/log").then(r => r.data);
 export const getGcalSettings = () => api.get("/gcal/settings").then(r => r.data);
 export const setGcalSettings = (data) => api.put("/gcal/settings", data).then(r => r.data);
 export const gcalSyncNow = () => api.post("/gcal/sync").then(r => r.data);
+export const monthlyAgendaUrl = (yearMonth) => `${API}/reports/monthly-agenda.xlsx${yearMonth ? `?month=${yearMonth}` : ""}`;
 
 export const getIssuer = () => api.get("/settings/issuer").then(r => r.data);
 export const setIssuer = (data) => api.put("/settings/issuer", data).then(r => r.data);

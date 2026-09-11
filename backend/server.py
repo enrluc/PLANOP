@@ -2283,6 +2283,171 @@ async def cron_gcal_sync(request: Request, payload: ReminderCronIn, background_t
 
 app.include_router(api_router)
 
+# =============== MONTHLY AGENDA EXPORT (Excel) ===============
+
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+
+
+async def _build_monthly_agenda(user_id: str, year: int, month: int) -> tuple:
+    """Return (bytes xlsx, count) for confirmed/accepted interventions in a month."""
+    from calendar import monthrange
+    ndays = monthrange(year, month)[1]
+    start_iso = f"{year:04d}-{month:02d}-01"
+    end_iso = f"{year:04d}-{month:02d}-{ndays:02d}"
+    ivs = await db.interventions.find({
+        "user_id": user_id,
+        "status": {"$in": ["confirmed", "accepted", "done"]},
+        "date": {"$gte": start_iso, "$lte": end_iso},
+    }, {"_id": 0}).sort("date", 1).to_list(2000)
+
+    clients_map = {}
+    contracts_map = {}
+    if ivs:
+        c_ids = list({iv["client_id"] for iv in ivs})
+        cids = list({iv["contract_id"] for iv in ivs})
+        clients_map = {c["id"]: c for c in await db.clients.find({"id": {"$in": c_ids}}, {"_id": 0}).to_list(2000)}
+        contracts_map = {c["id"]: c for c in await db.contracts.find({"id": {"$in": cids}}, {"_id": 0}).to_list(2000)}
+
+    issuer = await db.issuer_settings.find_one({"user_id": user_id}, {"_id": 0}) or {}
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = f"Agenda {month:02d}-{year}"
+    headers = ["Data", "Fascia oraria", "Cliente", "Località", "Indirizzo",
+               "Servizio prestato", "Stato", "Km percorsi"]
+    ws.append(headers)
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="1E40AF", end_color="1E40AF", fill_type="solid")
+    for cell in ws[1]:
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    slot_label = {"morning": "09:00 - 13:30", "afternoon": "14:30 - 18:00", "full": "09:00 - 18:00"}
+    total_km = 0.0
+    prev_lat, prev_lng = None, None
+    if issuer.get("city"):
+        # Approximate issuer start point (we don't geocode issuer, so use first client of the month as home)
+        pass
+
+    for iv in ivs:
+        cli = clients_map.get(iv["client_id"], {})
+        ctr = contracts_map.get(iv["contract_id"], {})
+        km = ""
+        lat, lng = cli.get("lat"), cli.get("lng")
+        if lat and lng and prev_lat and prev_lng:
+            d = haversine(prev_lat, prev_lng, lat, lng)
+            km = round(d, 1)
+            total_km += d
+        prev_lat, prev_lng = lat if lat else prev_lat, lng if lng else prev_lng
+        stato = {"confirmed": "Email inviata", "accepted": "Accettato", "done": "Completato"}.get(iv.get("status"), iv.get("status"))
+        ws.append([
+            iv["date"],
+            slot_label.get(iv.get("slot", "full"), "09:00 - 18:00"),
+            cli.get("name", ""),
+            cli.get("city", ""),
+            cli.get("address", ""),
+            ctr.get("intervention_type", ctr.get("title", "")),
+            stato,
+            km,
+        ])
+
+    # Total row
+    ws.append([])
+    total_row = ["TOTALE", "", f"{len(ivs)} interventi", "", "", "", "Km percorsi:", round(total_km, 1)]
+    ws.append(total_row)
+    for cell in ws[ws.max_row]:
+        cell.font = Font(bold=True)
+
+    # Column widths
+    widths = [12, 16, 30, 18, 40, 30, 16, 14]
+    for i, w in enumerate(widths, 1):
+        ws.column_dimensions[chr(64 + i)].width = w
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue(), len(ivs)
+
+
+@api_router.get("/reports/monthly-agenda.xlsx")
+async def monthly_agenda(month: Optional[str] = None, user=Depends(get_current_user)):
+    """Export confirmed/accepted interventions for a month as Excel.
+    month=YYYY-MM (default: previous month if today is day 1..5, else current month)."""
+    today = date.today()
+    if month:
+        try:
+            y, m = int(month.split("-")[0]), int(month.split("-")[1])
+        except Exception:
+            raise HTTPException(400, "Formato mese: YYYY-MM")
+    else:
+        # Default: previous month if we're in first week, else current
+        if today.day <= 5:
+            first_prev = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+            y, m = first_prev.year, first_prev.month
+        else:
+            y, m = today.year, today.month
+    data, n = await _build_monthly_agenda(user["user_id"], y, m)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename=agenda-{y:04d}-{m:02d}.xlsx"},
+    )
+
+
+@api_router.post("/cron/monthly-agenda")
+async def cron_monthly_agenda(request: Request, payload: ReminderCronIn, background_tasks: BackgroundTasks):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    auth = request.headers.get("Authorization", "")
+    token = auth[7:] if auth.startswith("Bearer ") else ""
+    if not WEBHOOK_CRON_SECRET or not _secrets.compare_digest(token, WEBHOOK_CRON_SECRET):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    run_id = request.headers.get("X-Webhook-Id") or (payload.run_id or uuid.uuid4().hex)
+    existing = await db.cron_runs.find_one({"run_id": run_id}, {"_id": 0})
+    if existing:
+        return {"ok": True, "duplicate": True}
+    await db.cron_runs.insert_one({
+        "run_id": run_id, "schedule_id": "monthly-agenda",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    })
+
+    async def _send_all():
+        today = date.today()
+        first_prev = (today.replace(day=1) - timedelta(days=1)).replace(day=1)
+        y, m = first_prev.year, first_prev.month
+        users = await db.users.find({}, {"_id": 0, "user_id": 1, "email": 1, "name": 1}).to_list(1000)
+        for u in users:
+            try:
+                data, n = await _build_monthly_agenda(u["user_id"], y, m)
+                if n == 0 or not u.get("email"):
+                    continue
+                import base64 as _b64
+                # Send email with attachment via Emergent Resend
+                payload_mail = {
+                    "to": [u["email"]],
+                    "subject": f"Agenda interventi {m:02d}/{y}",
+                    "html": f"<p>Ciao {escape(u.get('name','') or '')},</p>"
+                            f"<p>in allegato l'agenda con <strong>{n}</strong> interventi confermati/accettati del mese <strong>{m:02d}/{y}</strong>.</p>"
+                            f"<p>Buon lavoro,<br>PlanOp</p>",
+                    "from_name": EMAIL_FROM_NAME,
+                    "attachments": [{
+                        "filename": f"agenda-{y:04d}-{m:02d}.xlsx",
+                        "content": _b64.b64encode(data).decode(),
+                    }],
+                }
+                async with httpx.AsyncClient(timeout=30) as hc:
+                    await hc.post(f"{EMAIL_BASE_URL}/api/v1/email/send",
+                                  headers={"X-Email-Key": EMAIL_KEY}, json=payload_mail)
+            except Exception as e:
+                logger.error(f"monthly-agenda for {u.get('email')}: {e}")
+
+    background_tasks.add_task(_send_all)
+    return {"ok": True, "run_id": run_id}
+
+
+app.include_router(api_router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
