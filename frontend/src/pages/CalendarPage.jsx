@@ -3,6 +3,7 @@ import {
   listInterventions, listContracts, listClients, getSubscribeUrl,
   listManualEvents, createManualEvent, deleteManualEvent, reschedulePlan,
   confirmIntervention, unconfirmIntervention, updateIntervention, acceptIntervention,
+  gcalSyncNow,
 } from "../lib/api";
 import { Card } from "../components/ui/card";
 import { Button } from "../components/ui/button";
@@ -166,6 +167,18 @@ export default function CalendarPage() {
     finally { setRescheduling(false); }
   };
 
+  const [syncingGcal, setSyncingGcal] = useState(false);
+  const syncGcal = async () => {
+    setSyncingGcal(true);
+    try {
+      const r = await gcalSyncNow();
+      if (r.skipped) toast.warning("URL iCal Google non configurato o disattivato. Vai in Impostazioni.");
+      else toast.success(`${r.synced} eventi Google Calendar sincronizzati`);
+      load();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Sync Google fallito"); }
+    finally { setSyncingGcal(false); }
+  };
+
   return (
     <div data-testid="calendar-view-section" className="max-w-7xl mx-auto">
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4 mb-8">
@@ -176,6 +189,9 @@ export default function CalendarPage() {
         <div className="flex flex-wrap gap-2">
           <Button data-testid="add-manual-event-button" variant="outline" onClick={() => openAdd("")}>
             <Plus className="w-4 h-4 mr-2" /> Appuntamento extra
+          </Button>
+          <Button data-testid="sync-gcal-now-button" variant="outline" onClick={syncGcal} disabled={syncingGcal}>
+            <RefreshCw className={`w-4 h-4 mr-2 ${syncingGcal ? "animate-spin" : ""}`} /> Sync Google Cal
           </Button>
           <Button data-testid="reschedule-all-button" variant="outline" onClick={reschedule} disabled={rescheduling}>
             <RefreshCw className={`w-4 h-4 mr-2 ${rescheduling ? "animate-spin" : ""}`} /> Riprogramma tutto
